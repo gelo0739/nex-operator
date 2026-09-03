@@ -1,24 +1,52 @@
-import React, { useState } from 'react';
-import { Bus, Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react';
+import { useState } from 'react';
+import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Bus, Mail, Lock, Eye, EyeOff, ArrowRight, AlertCircle } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 
-export default function App() {
+export default function OperatorLogin() {
+  const { user, loading, signIn } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (e) => {
+  const redirectTo = location.state?.from?.pathname || '/dashboard';
+
+  // Already signed in — skip the form.
+  if (!loading && user) return <Navigate to={redirectTo} replace />;
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    console.log('Logging in operator:', { email, password, rememberMe });
+    setError('');
+    setSubmitting(true);
+    try {
+      await signIn(email.trim(), password, rememberMe);
+      navigate(redirectTo, { replace: true });
+    } catch (err) {
+      // Don't disclose whether the email exists.
+      const code = err?.code || '';
+      setError(
+        code === 'auth/too-many-requests'
+          ? 'Too many attempts. Please wait a moment and try again.'
+          : 'Invalid credentials. Check your email and password.',
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
     <div className="min-h-screen w-full relative flex items-center justify-center bg-slate-200/60 font-sans overflow-hidden">
       {/* Background Image Overlay with Motion Blur Style */}
-      <div 
+      <div
         className="absolute inset-0 bg-cover bg-center filter grayscale opacity-25"
-        style={{ 
-          backgroundImage: `url('https://images.unsplash.com/photo-1570125909232-eb263c188f7e?q=80&w=2070&auto=format&fit=crop')` 
+        style={{
+          backgroundImage: `url('https://images.unsplash.com/photo-1570125909232-eb263c188f7e?q=80&w=2070&auto=format&fit=crop')`,
         }}
       />
       <div className="absolute inset-0 bg-gradient-to-tr from-slate-200/80 via-slate-100/60 to-transparent" />
@@ -45,6 +73,14 @@ export default function App() {
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-5">
+          {/* Error banner */}
+          {error && (
+            <div className="flex items-start gap-2.5 bg-red-50 border border-red-100 text-red-700 text-xs font-medium rounded-xl px-3.5 py-3">
+              <AlertCircle className="w-4 h-4 mt-px shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
           {/* Email Address Input */}
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1.5">
@@ -111,10 +147,11 @@ export default function App() {
           {/* Sign In Button */}
           <button
             type="submit"
-            className="w-full mt-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold py-3.5 px-4 rounded-xl shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2 transition-all cursor-pointer"
+            disabled={submitting}
+            className="w-full mt-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3.5 px-4 rounded-xl shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2 transition-all cursor-pointer"
           >
-            <span>Sign In</span>
-            <ArrowRight className="w-4 h-4" />
+            <span>{submitting ? 'Signing In…' : 'Sign In'}</span>
+            {!submitting && <ArrowRight className="w-4 h-4" />}
           </button>
         </form>
 
