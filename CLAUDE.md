@@ -22,7 +22,7 @@ signing in with an email/password that already exists in the project's Firebase 
 | Routing        | `react-router-dom` v7                                        |
 | Icons          | `lucide-react` (used everywhere — do not introduce another icon set) |
 | Maps           | `@react-google-maps/api` (`GoogleMap`, `useJsApiLoader`, `MarkerF`) |
-| Auth / data    | `firebase` v12 — Auth wired for login; Realtime DB / Firestore for fleet data not integrated yet |
+| Auth / data    | `firebase` v12 — Auth for login; Firestore (`db`) for fleet records; Realtime DB (`database`) for live bus positions; Storage (`storage`) |
 | Lint           | ESLint 10 flat config (`eslint.config.js`), `npm run lint`   |
 | Language       | Plain JavaScript + JSX (no TypeScript)                       |
 
@@ -46,7 +46,14 @@ src/
   App.jsx                      # BrowserRouter + <AuthProvider> + route table
   index.css                    # Tailwind entrypoint (single @import line)
   lib/
-    firebase.js                # initializeApp + getAuth from VITE_PUBLIC_FIREBASE_* env
+    firebase.js                # initializeApp from VITE_PUBLIC_FIREBASE_* env; exports app, auth, db (Firestore), database (RTDB), storage
+  hooks/                       # live-data hooks — subscribe in useEffect, return a value, unsubscribe on cleanup
+    useBusCount.js             # Firestore `buses` collection size
+    useActiveBusCount.js       # RTDB `activeBuses` with status "active" and lastUpdated < 5 min old
+    usePendingLostItemCount.js # Firestore `lost_item_reports` where status == "PENDING"
+    useConductorCount.js       # empty — not implemented yet
+  utils/
+    dashboardServices.js       # one-shot Firestore reads (getBuses, getRoutes, getConductorCount) + subscribeToActiveBuses (RTDB)
   context/
     AuthContext.jsx            # <AuthProvider> + useAuth() — user, loading, signIn, signOut
   (operator)/                  # route-group folder for authenticated operator pages
@@ -120,7 +127,7 @@ add one entry to `navItems` **and** register its route in `src/App.jsx` (`protec
 
 | Label                | Route                | File                          | Status        |
 | -------------------- | -------------------- | ----------------------------- | ------------- |
-| Fleet Overview       | `/dashboard`         | `(operator)/Dashboard.jsx`    | built (mock data) |
+| Fleet Overview       | `/dashboard`         | `(operator)/Dashboard.jsx`    | built (live stats, mock map markers) |
 | Manage Conductors    | `/manage-conductors` | `(operator)/ManageConductors.jsx` | built (mock data) |
 | Manage Bus           | `/manage-bus`        | `(operator)/ManageBus.jsx`    | placeholder   |
 | Manage Route         | `/manage-route`      | `(operator)/ManageRoute.jsx`  | placeholder   |
@@ -205,12 +212,23 @@ HTTP referrer in the Google Cloud console. Firebase web config values are not se
 lock down access with Firebase Auth + security rules. To purge the tracked copy locally:
 `git rm --cached .env` (already done in the working tree — commit it).
 
+### Firebase MCP
+
+`.mcp.json` registers the Firebase MCP server (`firebase mcp`) for Claude Code, and `.firebaserc`
+pins the default project to `nex-71ab9`. Requires `npm i -g firebase-tools` and `firebase login`.
+Use it to inspect security rules, SDK config and project resources instead of guessing.
+
 ## Current state / known gaps
 
 - Auth is fully wired (login, protected routes, persistence, sign out). Needs a real account in
   the Firebase project's Authentication tab to test end to end.
-- `Dashboard.jsx` and `ManageConductors.jsx` render **mock/hard‑coded data** — no Firebase
-  reads yet (Realtime DB / Firestore not integrated).
+- `Dashboard.jsx` stat cards are **live** (via `src/hooks/`); the map markers are still the
+  hard-coded `BUS_LOCATIONS` — wire them to `subscribeToActiveBuses` (RTDB `activeBuses`).
+- `ManageConductors.jsx` still renders mock data. Conductors are Firestore `users` docs with
+  `role == "conductor"`. `useConductorCount.js` is empty and `USERS_COLLECTION` in
+  `dashboardServices.js` is `""` — fill both in.
+- Data model so far: Firestore `buses`, `routes`, `users`, `lost_item_reports` (`status`
+  e.g. `"PENDING"`); RTDB `activeBuses/*` (`busId`, `status`, `lastUpdated` ms epoch).
 - `ManageBus/ManageRoute/PassengerFeedback/LostItemReports/EndOfTripReports` are placeholders.
 - The notification bell in `MainLayout` is decorative (static red dot).
 - `src/App.css` and `src/assets/*` are Vite starter leftovers and can be removed.
@@ -221,6 +239,9 @@ lock down access with Firebase Auth + security rules. To purge the tracked copy 
 - Functional components, default export, one component per file, `PascalCase.jsx`.
 - Authenticated pages live in `src/(operator)/` and are wrapped in `<MainLayout>`.
 - Shared/reusable UI goes in `src/components/`.
+- Live Firebase subscriptions go in `src/hooks/` (`useXxx.js`, default export, unsubscribe in
+  the effect cleanup); one-shot reads/writes go in `src/utils/`. Always import `db`/`database`
+  from `src/lib/firebase.js` — never call `initializeApp` elsewhere.
 - Style exclusively with Tailwind utility classes inline — no CSS modules, no styled‑components.
   Match the design‑system section above; when unsure, mirror an existing page.
 - Icons from `lucide-react` only.
