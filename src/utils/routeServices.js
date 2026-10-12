@@ -1,6 +1,6 @@
 import { addDoc, collection, deleteDoc, doc, getDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { db } from "../lib/firebase";
-import { ROUTES_COLLECTION } from "./dashboardServices";
+import { ROUTES_COLLECTION } from "../lib/collections";
 
 // get one route from firestore (null if it doesn't exist)
 export const getRoute = async (routeId) => {

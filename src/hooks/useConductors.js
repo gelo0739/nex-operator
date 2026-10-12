@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "../lib/firebase";
-import { USERS_COLLECTION } from "../utils/dashboardServices";
+import { USERS_COLLECTION } from "../lib/collections";
 
 /**
  * Live list of conductors (Firestore `users` with role "conductor") on the

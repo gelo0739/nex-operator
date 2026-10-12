@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { GoogleMap, OverlayViewF, OverlayView, PolylineF } from '@react-google-maps/api';
 import { CarFront, Loader2, Maximize2 } from 'lucide-react';
-import { formatDistance, formatDuration } from '../utils/geo';
+import { formatDistance, formatTravelTime } from '../utils/format';
 import { MAP_ID } from '../hooks/useGoogleMaps';
 import AdvancedMarker from './AdvancedMarker';
 import MapPin from './MapPin';
@@ -136,7 +136,7 @@ export default function RouteEditorMap({ start, end, waypoints, route, routeLoad
             <div className="flex items-center gap-2 bg-white border border-slate-300 rounded-md shadow-md px-2.5 py-1.5 whitespace-nowrap pointer-events-none">
               <CarFront className="w-4 h-4 text-slate-700" />
               <div className="leading-tight">
-                <p className="text-xs font-bold text-slate-900">{formatDuration(route.durationSeconds)}</p>
+                <p className="text-xs font-bold text-slate-900">{formatTravelTime(route.durationSeconds)}</p>
                 <p className="text-[10px] text-slate-500">{formatDistance(route.distanceMeters)}</p>
               </div>
             </div>

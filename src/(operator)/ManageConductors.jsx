@@ -4,7 +4,7 @@ import MainLayout from '../components/MainLayout';
 import ConductorFormModal from '../components/ConductorFormModal';
 import { useAuth } from '../context/AuthContext';
 import useConductors from '../hooks/useConductors';
-import useActiveBuses from '../hooks/useActiveBuses';
+import useLiveBuses from '../hooks/useLiveBuses';
 import useRoutes from '../hooks/useRoutes';
 
 const PAGE_SIZE = 10;
@@ -47,7 +47,11 @@ function StatusBadge({ active }) {
 export default function ManageConductors() {
   const { busLine } = useAuth();
   const { conductors, loading, error } = useConductors(busLine);
-  const activeByConductor = useActiveBuses();
+  // Live buses keyed by conductor (status, bus number and route for each row).
+  const liveBuses = useLiveBuses();
+  const activeByConductor = new Map(
+    liveBuses.filter((b) => b.conductorId).map((b) => [b.conductorId, b]),
+  );
   const { routes } = useRoutes(busLine);
 
   const [showFilters, setShowFilters] = useState(false);

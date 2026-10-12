@@ -10,7 +10,9 @@ import useGoogleMaps from '../hooks/useGoogleMaps';
 import useDrivingRoute from '../hooks/useDrivingRoute';
 import useRoutes from '../hooks/useRoutes';
 import { reverseGeocode } from '../utils/directions';
-import { bestInsertIndex, DEFAULT_HOURS, formatDistance, formatHours, haversineMeters, parseHours } from '../utils/geo';
+import { bestInsertIndex, DEFAULT_HOURS, formatHours, haversineMeters, parseHours } from '../utils/geo';
+import { formatDistance } from '../utils/format';
+import { routeLabel } from '../utils/routes';
 import { createRoute, getRoute, updateRoute } from '../utils/routeServices';
 
 // The Directions API accepts at most 25 intermediate waypoints per request.
@@ -35,8 +37,7 @@ const pointFromDoc = (coords, name) => ({
   autoName: !name,
 });
 
-const describeRoute = (doc) =>
-  doc.startDestination && doc.endDestination ? `${doc.startDestination} to ${doc.endDestination}` : doc.name || 'this route';
+const describeRoute = (doc) => routeLabel(doc, 'this route');
 
 // "Alfonso, Cavite - PITX, Paranaque" → "PITX, Paranaque - Alfonso, Cavite".
 // Returns null when the name isn't in that two-part form.
@@ -60,6 +61,8 @@ export default function ConfigureRoute() {
 /**
  * - edit:   routeId set → load that route and update it on save.
  * - return: returnOf set → load that route reversed (B→A) and save as a new route.
+ *           Reached from this editor's "Save & Create Return Route" button
+ *           (the route cards on Manage Route no longer offer it).
  * - new:    neither → empty form.
  */
 function RouteEditor({ routeId, returnOf }) {
@@ -289,11 +292,8 @@ function RouteEditor({ routeId, returnOf }) {
       ? route.distanceMeters > returnSource.distanceMeters * RETURN_DETOUR_RATIO
       : false;
 
-  const handleSave = async () => {
-    if (!canSave) return;
-    setSaving(true);
-    setSaveError(null);
-
+  // Saves the route (create or update) and returns its id. Throws on failure.
+  const saveRoute = async () => {
     // Keep the existing display name unless the endpoints were renamed.
     const keepName =
       original?.name && original.startDestination === startName && original.endDestination === endName;
@@ -313,16 +313,37 @@ function RouteEditor({ routeId, returnOf }) {
       line: busLine,
     };
 
+    if (isEdit) {
+      await updateRoute(routeId, data);
+      return routeId;
+    }
+    return createRoute(data);
+  };
+
+  // Shared busy / error handling; `then(savedId)` runs after a successful save.
+  const runSave = async (then) => {
+    if (!canSave) return;
+    setSaving(true);
+    setSaveError(null);
     try {
-      if (isEdit) await updateRoute(routeId, data);
-      else await createRoute(data);
+      const savedId = await saveRoute();
       setDirty(false);
-      goBack();
+      then(savedId);
     } catch {
       setSaveError('Couldn’t save the route. Check your connection and try again.');
       setSaving(false);
     }
   };
+
+  const handleSave = () => runSave(() => goBack());
+
+  // Return route (B→A) of this one. It must be saved first so the return
+  // editor can load it; a saved route with no unsaved changes opens directly.
+  // `replace` so Back from the return editor goes to the list, not here.
+  const openReturnEditor = (id) => navigate(`/manage-route/new?returnOf=${id}`, { replace: true });
+  const canOpenReturnDirectly = isEdit && !dirty;
+  const handleCreateReturn = () =>
+    canOpenReturnDirectly ? openReturnEditor(routeId) : runSave((savedId) => openReturnEditor(savedId));
 
   // ---- render ---------------------------------------------------------------
 
@@ -497,6 +518,18 @@ function RouteEditor({ routeId, returnOf }) {
               {saving && <Loader2 className="w-4 h-4 animate-spin" />}
               {saving ? 'Saving…' : 'Save Route Configuration'}
             </button>
+            {!isReturn && (
+              <button
+                type="button"
+                onClick={handleCreateReturn}
+                disabled={saving || (!canOpenReturnDirectly && !canSave)}
+                title="Create the same route in the opposite direction (start and end swapped, stops reversed)"
+                className="mt-2.5 w-full flex items-center justify-center gap-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-full py-2.5 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
+              >
+                <ArrowLeftRight className="w-4 h-4" />
+                {canOpenReturnDirectly ? 'Create Return Route' : 'Save & Create Return Route'}
+              </button>
+            )}
           </div>
         </div>
 

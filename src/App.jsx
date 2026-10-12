@@ -1,17 +1,21 @@
+import { lazy } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
-
+import AppShell from "./components/AppShell";
 import OperatorLogin from "./(operator)/OperatorLogin";
-import Dashboard from "./(operator)/Dashboard";
-import ManageConductors from "./(operator)/ManageConductors";
-import ManageBus from "./(operator)/ManageBus";
-import ManageRoute from "./(operator)/ManageRoute";
-import ConfigureRoute from "./(operator)/ConfigureRoute";
-import PassengerFeedback from "./(operator)/PassengerFeedback";
-import LostItemReports from "./(operator)/LostItemReports";
-import EndOfTripReports from "./(operator)/EndOfTripReports";
-import AccountSettings from "./(operator)/AccountSettings";
+
+// Pages are code-split: each loads (with its own dependencies — Google Maps,
+// drag-and-drop, …) only when first opened. <AppShell> shows a spinner meanwhile.
+const Dashboard = lazy(() => import("./(operator)/Dashboard"));
+const ManageConductors = lazy(() => import("./(operator)/ManageConductors"));
+const ManageBus = lazy(() => import("./(operator)/ManageBus"));
+const ManageRoute = lazy(() => import("./(operator)/ManageRoute"));
+const ConfigureRoute = lazy(() => import("./(operator)/ConfigureRoute"));
+const PassengerFeedback = lazy(() => import("./(operator)/PassengerFeedback"));
+const LostItemReports = lazy(() => import("./(operator)/LostItemReports"));
+const EndOfTripReports = lazy(() => import("./(operator)/EndOfTripReports"));
+const AccountSettings = lazy(() => import("./(operator)/AccountSettings"));
 
 const protectedRoutes = [
   { path: "/dashboard", element: <Dashboard /> },
@@ -34,13 +38,18 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<OperatorLogin />} />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          {protectedRoutes.map(({ path, element }) => (
-            <Route
-              key={path}
-              path={path}
-              element={<ProtectedRoute>{element}</ProtectedRoute>}
-            />
-          ))}
+          {/* Every operator page shares one persistent shell (sidebar + header). */}
+          <Route
+            element={
+              <ProtectedRoute>
+                <AppShell />
+              </ProtectedRoute>
+            }
+          >
+            {protectedRoutes.map(({ path, element }) => (
+              <Route key={path} path={path} element={element} />
+            ))}
+          </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </BrowserRouter>

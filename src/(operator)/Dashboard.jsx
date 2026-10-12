@@ -1,31 +1,32 @@
 import MainLayout from "../components/MainLayout";
 import { Bus, Pause, FileText } from "lucide-react";
-import { GoogleMap } from "@react-google-maps/api";
-import useGoogleMaps, { MAP_ID } from "../hooks/useGoogleMaps";
-import AdvancedMarker from "../components/AdvancedMarker";
-import MapPin from "../components/MapPin";
-import useActiveBusCount from "../hooks/useActiveBusCount";
-import useBusCount from "../hooks/useBusCount";
-import usePendinglostItemCount from "../hooks/usePendingLostItemCount";
-// (Kept from original Dashboard.jsx)
-const MAP_CENTER = { lat: 14.28, lng: 120.93 };
-const MAP_CONTAINER_STYLE = {
-  width: "100%",
-  height: "100%",
-  borderRadius: "1.25rem",
-};
-const MAP_OPTIONS = { mapId: MAP_ID };
-const BUS_LOCATIONS = [
-  { id: "402", lat: 14.3294, lng: 120.9367, label: "Bus #402" },
-  { id: "108", lat: 14.2251, lng: 120.975, label: "Bus #108" },
-];
+import FleetMap from "../components/FleetMap";
+import { useAuth } from "../context/AuthContext";
+import useBuses from "../hooks/useBuses";
+import useLiveBuses from "../hooks/useLiveBuses";
+import useRoutes from "../hooks/useRoutes";
+import useConductors from "../hooks/useConductors";
+import usePendingLostItemCount from "../hooks/usePendingLostItemCount";
 
 export default function Dashboard() {
-  const { isLoaded } = useGoogleMaps();
+  const { busLine } = useAuth();
+  const { routes } = useRoutes(busLine);
+  const { conductors } = useConductors(busLine);
+  const liveBuses = useLiveBuses();
 
-  const totalBusCount = useBusCount();
-  const activeBusCount = useActiveBusCount();
-  const pendingLostItemCount = usePendinglostItemCount();
+  // RTDB activeBuses has no line field: a bus belongs to this operator's line
+  // if it's running one of the line's routes or driven by one of its conductors.
+  const lineRouteIds = new Set(routes.map((r) => r.id));
+  const lineConductorIds = new Set(conductors.map((c) => c.id));
+  const lineBuses = liveBuses.filter(
+    (bus) => lineRouteIds.has(bus.routeId) || lineConductorIds.has(bus.conductorId),
+  );
+  const conductorNames = new Map(conductors.map((c) => [c.id, c.name || c.email]));
+
+  const { buses: lineFleet } = useBuses(busLine);
+  const totalBusCount = lineFleet.length; // this line's registered buses
+  const activeBusCount = lineBuses.length; // matches the pins on the map
+  const pendingLostItemCount = usePendingLostItemCount(busLine); // null while loading
 
   const inactiveBusCount = Math.max(totalBusCount - activeBusCount, 0);
   return (
@@ -74,7 +75,7 @@ export default function Dashboard() {
                   {stat.label}
                 </p>
                 <h2 className="text-3xl font-extrabold text-slate-900">
-                  {stat.value}
+                  {stat.value ?? "–"}
                 </h2>
               </div>
             </div>
@@ -82,31 +83,9 @@ export default function Dashboard() {
         })}
       </div>
 
-      {/* MAP */}
-      <div className="flex-1 min-h-[420px] bg-white p-2 rounded-3xl shadow-sm border border-slate-200/80 overflow-hidden relative">
-        {isLoaded ? (
-          <GoogleMap
-            mapContainerStyle={MAP_CONTAINER_STYLE}
-            center={MAP_CENTER}
-            zoom={11}
-            options={MAP_OPTIONS}
-          >
-            {BUS_LOCATIONS.map((bus) => (
-              <AdvancedMarker
-                key={bus.id}
-                position={{ lat: bus.lat, lng: bus.lng }}
-                title={bus.label}
-              >
-                <MapPin variant="bus" label={bus.label} />
-              </AdvancedMarker>
-            ))}
-          </GoogleMap>
-        ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center bg-slate-50 text-slate-400 rounded-2xl">
-            <Bus className="w-10 h-10 animate-bounce mb-2 text-blue-500" />
-            <p className="text-sm font-semibold">Loading Cavite Map...</p>
-          </div>
-        )}
+      {/* MAP — live buses on this line; click one to focus it */}
+      <div className="flex-1 min-h-[460px] bg-white p-2 rounded-3xl shadow-sm border border-slate-200/80 overflow-hidden relative">
+        <FleetMap buses={lineBuses} conductorNames={conductorNames} />
       </div>
     </MainLayout>
   );

@@ -1,33 +1,22 @@
 import { useState } from 'react';
-import { Plus, Pencil, BusFront } from 'lucide-react';
+import { AlertTriangle, BusFront, Loader2, Pencil, Plus } from 'lucide-react';
 import MainLayout from '../components/MainLayout';
 import BusFormModal from '../components/BusFormModal';
 import ConfirmDialog from '../components/ConfirmDialog';
+import Modal from '../components/Modal';
 import { useAuth } from '../context/AuthContext';
+import useBuses from '../hooks/useBuses';
+import useLiveBuses from '../hooks/useLiveBuses';
+import { createBus, deleteBus, updateBus } from '../utils/busServices';
 
-// Mock data shaped like Firestore `buses` docs — replace with getBuses() (utils/dashboardServices.js).
-const INITIAL_BUSES = [
-  { busId: 'BUS-001', plateNumber: 'NX-4492', model: 'Volta EV-X1', busLine: 'Cavite-Batangas' },
-  { busId: 'BUS-002', plateNumber: 'NX-8821', model: 'Volta EV-X1', busLine: 'Cavite-Batangas' },
-  { busId: 'BUS-003', plateNumber: 'NX-1204', model: 'Volta EV-X1', busLine: 'Cavite-Batangas' },
-];
-
-// Mock data shaped like RTDB `activeBuses` — replace with a live subscription (subscribeToActiveBuses).
-const MOCK_ACTIVE_BUSES = {
-  'BUS-001': { busId: 'BUS-001', status: 'active', lastUpdated: Date.now() },
-  'BUS-003': { busId: 'BUS-003', status: 'active', lastUpdated: Date.now() },
-};
-
-const STALE_THRESHOLD = 5 * 60 * 1000; // 5 minutes — same rule as hooks/useActiveBusCount.js
-
-function isBusActive(activeBuses, busId, now) {
-  const entry = activeBuses[busId];
-  return Boolean(entry && entry.status === 'active' && entry.lastUpdated && now - entry.lastUpdated <= STALE_THRESHOLD);
-}
-
-function StatusBadge({ active }) {
+function StatusBadge({ live }) {
+  const active = Boolean(live);
+  const title = active
+    ? `On route${live.routeName ? `: ${live.routeName}` : ''} — live location received in the last 5 minutes`
+    : 'Not on a route right now';
   return (
     <span
+      title={title}
       className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${
         active ? 'bg-emerald-50 text-emerald-700' : 'bg-orange-50 text-orange-600'
       }`}
@@ -39,24 +28,43 @@ function StatusBadge({ active }) {
 
 export default function ManageBus() {
   const { busLine } = useAuth(); // operator's line, from Firestore users/{uid}
-  const [buses, setBuses] = useState(INITIAL_BUSES);
-  const [now] = useState(() => Date.now());
-  const [modal, setModal] = useState(null); // null | { mode: 'add' } | { mode: 'edit', bus } | { mode: 'delete', bus }
+  const { buses, loading, error } = useBuses(busLine);
+  // A bus is ACTIVE while it's on a route: a fresh entry in RTDB activeBuses
+  // (status "active", reported within 5 min), keyed by its bus number.
+  const liveBuses = useLiveBuses();
+  const liveByNumber = new Map(liveBuses.map((b) => [b.busId, b]));
 
-  const closeModal = () => setModal(null);
+  // null | { mode: 'add' } | { mode: 'edit' | 'delete', busId }
+  const [modal, setModal] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
 
-  const handleSave = (data) => {
-    if (modal.mode === 'add') {
-      setBuses((prev) => [...prev, data]);
-    } else {
-      setBuses((prev) => prev.map((bus) => (bus.busId === modal.bus.busId ? { ...bus, ...data } : bus)));
-    }
-    closeModal();
+  // Look the bus up on every render so the pop-ups see live changes.
+  const modalBus = modal?.busId ? buses.find((b) => b.id === modal.busId) ?? null : null;
+  const modalBusLive = modalBus ? liveByNumber.get(modalBus.busNumber) : null;
+
+  const closeModal = () => {
+    setModal(null);
+    setDeleteError(null);
   };
 
-  const handleDelete = () => {
-    setBuses((prev) => prev.filter((bus) => bus.busId !== modal.bus.busId));
-    closeModal();
+  const handleSave = async (data) => {
+    if (modal.mode === 'add') await createBus(data, busLine);
+    else await updateBus(modalBus.id, data);
+    closeModal(); // the live snapshot updates the table
+  };
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteBus(modalBus.id);
+      closeModal();
+    } catch (err) {
+      setDeleteError(err.message);
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return (
@@ -64,7 +72,8 @@ export default function ManageBus() {
       <div>
         <button
           onClick={() => setModal({ mode: 'add' })}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-semibold px-5 py-2.5 rounded-xl shadow-lg shadow-blue-600/30 transition-all cursor-pointer"
+          disabled={!busLine}
+          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-semibold px-5 py-2.5 rounded-xl shadow-lg shadow-blue-600/30 transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
         >
           <Plus className="w-4 h-4" />
           Add New Bus
@@ -85,17 +94,17 @@ export default function ManageBus() {
             </thead>
             <tbody>
               {buses.map((bus) => (
-                <tr key={bus.busId} className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50 transition-colors">
-                  <td className="px-5 py-4 text-sm font-bold text-slate-950">{bus.busId}</td>
+                <tr key={bus.id} className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50 transition-colors">
+                  <td className="px-5 py-4 text-sm font-bold text-slate-950">{bus.busNumber}</td>
                   <td className="px-5 py-4 text-sm text-slate-700">{bus.plateNumber}</td>
                   <td className="px-5 py-4 text-sm text-slate-700">{bus.model}</td>
                   <td className="px-5 py-4">
-                    <StatusBadge active={isBusActive(MOCK_ACTIVE_BUSES, bus.busId, now)} />
+                    <StatusBadge live={liveByNumber.get(bus.busNumber)} />
                   </td>
                   <td className="px-5 py-4 text-right">
                     <button
-                      onClick={() => setModal({ mode: 'edit', bus })}
-                      aria-label={`Edit ${bus.busId}`}
+                      onClick={() => setModal({ mode: 'edit', busId: bus.id })}
+                      aria-label={`Edit ${bus.busNumber}`}
                       className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
                     >
                       <Pencil className="w-4 h-4" />
@@ -107,11 +116,25 @@ export default function ManageBus() {
               {buses.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-5 py-14 text-center">
-                    <div className="w-12 h-12 mx-auto mb-3 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center">
-                      <BusFront className="w-6 h-6" />
-                    </div>
-                    <p className="text-sm font-semibold text-slate-900">No buses yet</p>
-                    <p className="text-xs text-slate-500 mt-1">Click “Add New Bus” to register your first vehicle.</p>
+                    {loading ? (
+                      <p className="flex items-center justify-center gap-2 text-sm text-slate-500">
+                        <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                        Loading buses…
+                      </p>
+                    ) : error ? (
+                      <>
+                        <p className="text-sm font-semibold text-red-600">Couldn’t load buses</p>
+                        <p className="text-xs text-slate-500 mt-1">Check your connection and refresh the page.</p>
+                      </>
+                    ) : (
+                      <>
+                        <div className="w-12 h-12 mx-auto mb-3 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center">
+                          <BusFront className="w-6 h-6" />
+                        </div>
+                        <p className="text-sm font-semibold text-slate-900">No buses yet</p>
+                        <p className="text-xs text-slate-500 mt-1">Click “Add New Bus” to register your first vehicle.</p>
+                      </>
+                    )}
                   </td>
                 </tr>
               )}
@@ -120,26 +143,51 @@ export default function ManageBus() {
         </div>
       </div>
 
-      {(modal?.mode === 'add' || modal?.mode === 'edit') && (
+      {(modal?.mode === 'add' || (modal?.mode === 'edit' && modalBus)) && (
         <BusFormModal
+          key={modal.busId ?? 'new'}
           mode={modal.mode}
-          bus={modal.bus}
-          isActive={modal.bus ? isBusActive(MOCK_ACTIVE_BUSES, modal.bus.busId, now) : false}
-          busLines={busLine ? [busLine] : []}
-          existingIds={buses.map((bus) => bus.busId)}
+          bus={modalBus}
+          isActive={Boolean(modalBusLive)}
+          line={busLine}
           onSave={handleSave}
-          onDelete={() => setModal({ mode: 'delete', bus: modal.bus })}
+          onDelete={() => setModal({ mode: 'delete', busId: modalBus.id })}
           onClose={closeModal}
         />
       )}
 
-      {modal?.mode === 'delete' && (
+      {/* A bus on a route right now can't be deleted. */}
+      {modal?.mode === 'delete' && modalBus && modalBusLive && (
+        <Modal
+          icon={AlertTriangle}
+          iconClassName="bg-amber-50 text-amber-600"
+          title={`${modalBus.busNumber} is on a route`}
+          subtitle="It’s sending live locations right now, so it can’t be deleted. Try again after its trip ends."
+          onClose={() => setModal({ mode: 'edit', busId: modalBus.id })}
+          maxWidth="max-w-md"
+        >
+          <div className="flex justify-end p-6">
+            <button
+              type="button"
+              onClick={() => setModal({ mode: 'edit', busId: modalBus.id })}
+              className="text-xs font-semibold text-slate-700 px-5 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+            >
+              Back
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {modal?.mode === 'delete' && modalBus && !modalBusLive && (
         <ConfirmDialog
-          title={`Delete ${modal.bus.busId}?`}
-          message="This removes the bus from your fleet. This action cannot be undone."
-          confirmLabel="Delete Bus"
-          onConfirm={handleDelete}
-          onCancel={() => setModal({ mode: 'edit', bus: modal.bus })}
+          title={`Delete ${modalBus.busNumber}?`}
+          message={
+            deleteError ??
+            'This removes the bus from your fleet. Past trips keep their bus number. This action cannot be undone.'
+          }
+          confirmLabel={deleting ? 'Deleting…' : 'Delete Bus'}
+          onConfirm={deleting ? () => {} : handleDelete}
+          onCancel={deleting ? () => {} : () => setModal({ mode: 'edit', busId: modalBus.id })}
         />
       )}
     </MainLayout>

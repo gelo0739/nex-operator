@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "../lib/firebase";
-import { ROUTES_COLLECTION } from "../utils/dashboardServices";
+import { ROUTES_COLLECTION } from "../lib/collections";
 
 /**
  * Live list of Firestore `routes` on the given bus line.

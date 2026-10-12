@@ -7,7 +7,7 @@ import {
   browserLocalPersistence,
   browserSessionPersistence,
 } from 'firebase/auth';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 
 const AuthContext = createContext(null);
@@ -39,7 +39,12 @@ export function AuthProvider({ children }) {
     return onSnapshot(
       doc(db, 'users', uid),
       (snapshot) => {
-        setProfileSnap({ uid, profile: snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null });
+        // 'estimate' fills pending serverTimestamp() fields (e.g. right after
+        // clearing notifications) with the local time instead of null.
+        setProfileSnap({
+          uid,
+          profile: snapshot.exists() ? { id: snapshot.id, ...snapshot.data({ serverTimestamps: 'estimate' }) } : null,
+        });
       },
       (error) => {
         console.error('Failed to load user profile:', error);
@@ -52,12 +57,16 @@ export function AuthProvider({ children }) {
   const profileReady = !uid || profileSnap.uid === uid;
   const profile = uid && profileReady ? profileSnap.profile : null;
   const loading = authLoading || !profileReady;
+  // Only operator accounts with a bus line may use this dashboard (commuters
+  // can self-register in the NEX app, conductors have logins too).
+  const isOperator = profile?.role === 'operator' && Boolean(profile?.line);
 
   const value = useMemo(
     () => ({
       user,
       profile,
       busLine: profile?.line ?? null,
+      isOperator,
       loading,
       async signIn(email, password, rememberMe) {
         await setPersistence(
@@ -65,13 +74,29 @@ export function AuthProvider({ children }) {
           rememberMe ? browserLocalPersistence : browserSessionPersistence,
         );
         const cred = await signInWithEmailAndPassword(auth, email, password);
+        // Reject non-operator accounts right away. The error code is handled
+        // like wrong credentials, so the login form doesn't reveal that the
+        // account exists.
+        let snapshot = null;
+        try {
+          snapshot = await getDoc(doc(db, 'users', cred.user.uid));
+        } catch {
+          // fall through: treated as not an operator
+        }
+        const data = snapshot?.exists() ? snapshot.data() : null;
+        if (data?.role !== 'operator' || !data?.line) {
+          await fbSignOut(auth);
+          const error = new Error('Not an operator account.');
+          error.code = 'auth/not-operator';
+          throw error;
+        }
         return cred.user;
       },
       signOut() {
         return fbSignOut(auth);
       },
     }),
-    [user, profile, loading],
+    [user, profile, isOperator, loading],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

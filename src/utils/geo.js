@@ -1,4 +1,4 @@
-// Small geometry / formatting helpers for route editing.
+// Small geometry / operating-hours helpers for route editing.
 
 const EARTH_RADIUS_M = 6371000;
 const toRad = (deg) => (deg * Math.PI) / 180;
@@ -34,18 +34,6 @@ export const bestInsertIndex = (orderedPoints, point) => {
   // so gap i is waypoint index i.
   return bestGap;
 };
-
-export const formatDuration = (seconds) => {
-  if (typeof seconds !== "number") return "—";
-  const totalMinutes = Math.round(seconds / 60);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours === 0) return `${minutes} min`;
-  return minutes === 0 ? `${hours} hr` : `${hours} hr ${minutes} min`;
-};
-
-export const formatDistance = (meters) =>
-  typeof meters === "number" ? `${(meters / 1000).toFixed(1)} km` : "—";
 
 // --- Operating hours -------------------------------------------------------
 // Stored in Firestore as a display string ("2:00 AM - 10:00 PM" or

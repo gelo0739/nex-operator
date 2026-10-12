@@ -1,19 +1,19 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeftRight, Plus, Pencil, Trash2, Route as RouteIcon } from 'lucide-react';
+import { AlertTriangle, Plus, Pencil, Trash2, Route as RouteIcon } from 'lucide-react';
 import MainLayout from '../components/MainLayout';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useAuth } from '../context/AuthContext';
 import useRoutes from '../hooks/useRoutes';
+import useLiveBuses from '../hooks/useLiveBuses';
+import Modal from '../components/Modal';
 import { deleteRoute } from '../utils/routeServices';
+import { formatDistance } from '../utils/format';
+import { routeLabel } from '../utils/routes';
 
-const routeTitle = (route) =>
-  route.startDestination && route.endDestination
-    ? `${route.startDestination} to ${route.endDestination}`
-    : route.name || 'Untitled route';
-const formatDistance = (meters) => (typeof meters === 'number' ? `${(meters / 1000).toFixed(1)} km` : '—');
+const routeTitle = (route) => routeLabel(route, 'Untitled route');
 
-function RouteCard({ route, onEdit, onCreateReturn, onDelete }) {
+function RouteCard({ route, onEdit, onDelete }) {
   return (
     <div className="bg-white rounded-2xl border border-slate-200/60 shadow-sm p-5 flex flex-col">
       <h3 className="text-base font-bold text-slate-950">{routeTitle(route)}</h3>
@@ -30,14 +30,6 @@ function RouteCard({ route, onEdit, onCreateReturn, onDelete }) {
           className="p-2 -ml-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
         >
           <Pencil className="w-4 h-4" />
-        </button>
-        <button
-          onClick={onCreateReturn}
-          title={`Create the return route (${route.endDestination ?? 'end'} to ${route.startDestination ?? 'start'})`}
-          className="flex items-center gap-1 text-xs font-semibold text-blue-600 px-2 py-1.5 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
-        >
-          <ArrowLeftRight className="w-3.5 h-3.5" />
-          Return
         </button>
         <button
           onClick={onDelete}
@@ -58,6 +50,9 @@ export default function ManageRoute() {
   const { routes: visibleRoutes, loading, error } = useRoutes(busLine);
   const [deleting, setDeleting] = useState(null);
   const [deleteError, setDeleteError] = useState(null);
+  // Buses currently driving each route (fresh RTDB activeBuses entries).
+  const liveBuses = useLiveBuses();
+  const liveOnDeleting = deleting ? liveBuses.filter((b) => b.routeId === deleting.id) : [];
   const [isDeleting, setIsDeleting] = useState(false);
 
   const handleDelete = async () => {
@@ -118,7 +113,6 @@ export default function ManageRoute() {
                   key={route.id}
                   route={route}
                   onEdit={() => navigate(`/manage-route/${route.id}/edit`)}
-                  onCreateReturn={() => navigate(`/manage-route/new?returnOf=${route.id}`)}
                   onDelete={() => setDeleting(route)}
                 />
               ))}
@@ -142,7 +136,31 @@ export default function ManageRoute() {
         </>
       )}
 
-      {deleting && (
+      {/* A route a bus is driving right now can't be deleted. */}
+      {deleting && liveOnDeleting.length > 0 && (
+        <Modal
+          icon={AlertTriangle}
+          iconClassName="bg-amber-50 text-amber-600"
+          title={`${routeTitle(deleting)} is in use`}
+          subtitle={`${liveOnDeleting.map((b) => b.busId).join(', ')} ${
+            liveOnDeleting.length === 1 ? 'is' : 'are'
+          } on this route right now, so it can’t be deleted. Try again after the trip ends.`}
+          onClose={() => setDeleting(null)}
+          maxWidth="max-w-md"
+        >
+          <div className="flex justify-end p-6">
+            <button
+              type="button"
+              onClick={() => setDeleting(null)}
+              className="text-xs font-semibold text-slate-700 px-5 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+            >
+              OK
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {deleting && liveOnDeleting.length === 0 && (
         <ConfirmDialog
           title={`Delete ${routeTitle(deleting)}?`}
           message="This removes the route from your network. This action cannot be undone."

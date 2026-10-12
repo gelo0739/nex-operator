@@ -1,0 +1,49 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Cross-service lookup of the caller's Firestore profile.
+    function isOperator() {
+      return signedIn()
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'operator';
+    }
+
+    function isImageUnder5MB() {
+      return request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Feedback ticket photos: feedback/{uid}/{feedbackId}.jpg
+    // Private — only the commuter who uploaded it and operators can view it.
+    match /feedback/{uid}/{fileName} {
+      allow create: if signedIn() && request.auth.uid == uid && isImageUnder5MB();
+      allow read: if (signedIn() && request.auth.uid == uid) || isOperator();
+      allow delete: if isOperator();
+    }
+
+    // Lost-item photos: lost_items/{uid}/{reportId}/item.jpg | ticket.jpg
+    // Private — only the reporter and operators can view them.
+    match /lost_items/{uid}/{reportId}/{fileName} {
+      allow create: if signedIn() && request.auth.uid == uid && isImageUnder5MB();
+      allow read: if (signedIn() && request.auth.uid == uid) || isOperator();
+      allow delete: if isOperator();
+    }
+
+    // Legacy flat folders from before private paths. No new uploads; old docs
+    // reference these through token download URLs, which keep working.
+    match /lost_items/{fileName} {
+      allow read: if isOperator();
+    }
+    match /tickets/{fileName} {
+      allow read: if isOperator();
+    }
+
+    // Everything else is denied by default. Old photos are removed by the
+    // purgeOldPhotos / purgeOrphanPhotos Cloud Functions (Admin SDK).
+  }
+}

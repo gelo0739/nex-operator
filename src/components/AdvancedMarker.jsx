@@ -13,16 +13,22 @@ import { useGoogleMap } from '@react-google-maps/api';
  * - `anchor`: 'bottom' (default) puts the content's bottom-center on the
  *   position — right for teardrop pins. 'center' centers it — right for dots.
  * - `onDragEnd(lat, lng)` fires after the operator drops a draggable marker.
+ * - `onClick()` makes the marker clickable (keyboard-focusable too).
  */
-export default function AdvancedMarker({ position, draggable = false, onDragEnd, title, zIndex, anchor = 'bottom', children }) {
+export default function AdvancedMarker({ position, draggable = false, onDragEnd, onClick, title, zIndex, anchor = 'bottom', children }) {
   const map = useGoogleMap();
   const [container] = useState(() => document.createElement('div'));
   const markerRef = useRef(null);
   const onDragEndRef = useRef(onDragEnd);
+  const onClickRef = useRef(onClick);
 
   useEffect(() => {
     onDragEndRef.current = onDragEnd;
   }, [onDragEnd]);
+
+  useEffect(() => {
+    onClickRef.current = onClick;
+  }, [onClick]);
 
   // Create the marker once per map. The sync effects below are declared after
   // this one (and also depend on `map`), so they run right after it in the same
@@ -57,6 +63,18 @@ export default function AdvancedMarker({ position, draggable = false, onDragEnd,
   useEffect(() => {
     if (markerRef.current) markerRef.current.title = title ?? '';
   }, [map, title]);
+
+  // Click support ('gmp-click' is the AdvancedMarkerElement click event).
+  const clickable = Boolean(onClick);
+  useEffect(() => {
+    const marker = markerRef.current;
+    if (!marker) return undefined;
+    marker.gmpClickable = clickable;
+    if (!clickable) return undefined;
+    const handleClick = () => onClickRef.current?.();
+    marker.addEventListener('gmp-click', handleClick);
+    return () => marker.removeEventListener('gmp-click', handleClick);
+  }, [map, clickable]);
 
   useEffect(() => {
     if (markerRef.current) markerRef.current.zIndex = zIndex ?? null;

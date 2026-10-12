@@ -1,7 +1,8 @@
 import { doc, updateDoc } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
-import { db, functions } from "../lib/firebase";
-import { USERS_COLLECTION } from "./dashboardServices";
+import { db } from "../lib/firebase";
+import { functions } from "../lib/functions";
+import { USERS_COLLECTION } from "../lib/collections";
 
 export const CONDUCTOR_EMAIL_DOMAIN = "nex.com";
 

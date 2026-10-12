@@ -16,6 +16,9 @@ import { setGlobalOptions } from "firebase-functions/v2";
 initializeApp();
 setGlobalOptions({ region: "asia-southeast1", maxInstances: 10 });
 
+// Scheduled photo retention (see photoRetention.js).
+export { purgeOldPhotos, purgeOrphanPhotos } from "./photoRetention.js";
+
 const db = getFirestore();
 const auth = getAuth();
 
@@ -102,6 +105,9 @@ export const createConductor = onCall(async (request) => {
   }
 
   try {
+    // Realtime Database rules can't read Firestore, so the role is also kept
+    // as a custom auth claim (database.rules.json checks auth.token.role).
+    await auth.setCustomUserClaims(user.uid, { role: "conductor" });
     await db.collection(USERS).doc(user.uid).set({
       email,
       name,
@@ -158,5 +164,33 @@ export const deleteConductor = onCall(async (request) => {
   }
 
   await ref.delete();
+  return { ok: true };
+});
+
+// Called by the NEX app after a conductor sets their own password (replacing
+// the temporary one). Clears mustChangePassword — which clients can't write
+// themselves (firestore.rules) — but only if the password really changed
+// since the account was created or last reset: changing a password moves the
+// account's tokensValidAfterTime forward.
+export const completePasswordChange = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Sign in to continue.");
+  }
+  const uid = request.auth.uid;
+  const ref = db.collection(USERS).doc(uid);
+  const profile = (await ref.get()).data();
+  if (!profile || profile.role !== "conductor") {
+    throw new HttpsError("permission-denied", "Only conductor accounts use this.");
+  }
+  if (profile.mustChangePassword !== true) return { ok: true };
+
+  const user = await auth.getUser(uid);
+  const validAfter = Date.parse(user.tokensValidAfterTime ?? "");
+  const baseline = (profile.passwordResetAt ?? profile.createdAt)?.toMillis?.() ?? 0;
+  if (!(validAfter > baseline)) {
+    throw new HttpsError("failed-precondition", "Set a new password first.");
+  }
+
+  await ref.update({ mustChangePassword: false, passwordChangedAt: FieldValue.serverTimestamp() });
   return { ok: true };
 });

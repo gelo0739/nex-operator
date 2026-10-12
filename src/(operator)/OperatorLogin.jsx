@@ -4,7 +4,7 @@ import { Bus, Mail, Lock, Eye, EyeOff, ArrowRight, AlertCircle } from 'lucide-re
 import { useAuth } from '../context/AuthContext';
 
 export default function OperatorLogin() {
-  const { user, loading, signIn } = useAuth();
+  const { user, isOperator, loading, signIn } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -17,8 +17,8 @@ export default function OperatorLogin() {
 
   const redirectTo = location.state?.from?.pathname || '/dashboard';
 
-  // Already signed in — skip the form.
-  if (!loading && user) return <Navigate to={redirectTo} replace />;
+  // Already signed in as an operator — skip the form.
+  if (!loading && user && isOperator) return <Navigate to={redirectTo} replace />;
 
   const handleSubmit = async (e) => {
     e.preventDefault();

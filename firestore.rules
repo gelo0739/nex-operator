@@ -13,34 +13,203 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'operator';
     }
 
+    function callerProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Operators only manage data on their own bus line.
+    function operatorOnLine(line) {
+      return isOperator() && line == callerProfile().line;
+    }
+
     // Routes: every signed-in user (commuters, conductors) can view them;
-    // only operators can create, edit or delete.
+    // only an operator of the route's line can create, edit or delete it.
     match /routes/{routeId} {
       allow read: if signedIn();
-      allow create, update, delete: if isOperator();
+      allow create: if operatorOnLine(request.resource.data.line);
+      allow update: if operatorOnLine(resource.data.line)
+        && request.resource.data.line == resource.data.line;
+      allow delete: if operatorOnLine(resource.data.line);
     }
 
-    // Users: `role` and `line` are privileges, so only an operator may set or
-    // change them. Users can read their own profile; operators can read all.
-    // The mobile app's sign-up creates { email, role: "commuter", createdAt }.
+    // Users. Everyone reads their own profile. Operators read users on their
+    // line, plus commuters (feedback / lost-item submitter emails). Privileges
+    // (role, line) and the password-change bookkeeping are server-only: conductor
+    // accounts are created/reset by Cloud Functions, and completePasswordChange
+    // clears mustChangePassword. The NEX sign-up creates { email, role: "commuter", createdAt }.
     match /users/{userId} {
-      allow read: if signedIn() && (request.auth.uid == userId || isOperator());
-      allow create: if isOperator()
+      allow read: if signedIn()
+        && (request.auth.uid == userId
+            || (isOperator()
+                && (resource.data.role == 'commuter' || resource.data.line == callerProfile().line)));
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role == 'commuter'
+        && !('line' in request.resource.data)
+        && !('mustChangePassword' in request.resource.data);
+      allow update: if
+        // An operator may rename a conductor on their own line — nothing else.
+        (operatorOnLine(resource.data.line)
+          && request.auth.uid != userId
+          && resource.data.role == 'conductor'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']))
+        // Own profile: anything except privileges and password bookkeeping.
         || (signedIn()
-            && request.auth.uid == userId
-            && request.resource.data.role == 'commuter'
-            && !('line' in request.resource.data));
-      allow update: if isOperator()
-        || (signedIn()
-            && request.auth.uid == userId
-            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'line']));
-      allow delete: if isOperator();
+          && request.auth.uid == userId
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+               'role', 'line', 'mustChangePassword', 'passwordChangedAt', 'passwordResetAt', 'createdBy']));
+      allow delete: if false; // accounts are deleted by the deleteConductor function
     }
 
-    // Everything else (buses, trips, lost_item_reports, service_feedbacks, …)
-    // keeps the previous behavior: any signed-in user can read and write.
-    match /{collectionId}/{document=**} {
-      allow read, write: if signedIn() && !(collectionId in ['routes', 'users']);
+    // Rate-limit doc for (user, route): written in the same batch as each
+    // feedback. Updating it is only allowed 10 minutes after the last one.
+    function rateLimitPath(routeId) {
+      return /databases/$(database)/documents/feedback_rate_limits/$(request.auth.uid + '_' + routeId);
     }
+
+    // Passenger feedback: commuters submit their own (validated, rate-limited);
+    // only the author and operators can read it; operators review it.
+    match /service_feedbacks/{feedbackId} {
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'new'
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && request.resource.data.comment is string
+        && request.resource.data.comment.size() > 0
+        && request.resource.data.comment.size() <= 2000
+        && request.resource.data.createdAt == request.time
+        && (!('categories' in request.resource.data)
+            || (request.resource.data.categories is list
+                && request.resource.data.categories.size() <= 10))
+        && request.resource.data.routeId is string
+        && getAfter(rateLimitPath(request.resource.data.routeId)).data.lastAt == request.time;
+      allow read: if operatorOnLine(resource.data.line)
+        || (signedIn() && resource.data.userId == request.auth.uid);
+      // Operators (of the feedback's line) may only change the review fields.
+      allow update: if operatorOnLine(resource.data.line)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'operatorNote', 'statusUpdatedAt', 'statusUpdatedBy', 'statusUpdatedByEmail'])
+        && request.resource.data.status in ['new', 'reviewed', 'resolved']
+        && (!('operatorNote' in request.resource.data)
+            || (request.resource.data.operatorNote is string
+                && request.resource.data.operatorNote.size() <= 1000))
+        && request.resource.data.statusUpdatedAt == request.time
+        && request.resource.data.statusUpdatedBy == request.auth.uid;
+      allow delete: if operatorOnLine(resource.data.line);
+    }
+
+    // One doc per (user, route): { uid, routeId, lastAt }. Key = "<uid>_<routeId>".
+    match /feedback_rate_limits/{key} {
+      allow read: if signedIn() && key.matches(request.auth.uid + '_.*');
+      allow create: if signedIn()
+        && key == request.auth.uid + '_' + request.resource.data.routeId
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.lastAt == request.time;
+      allow update: if signedIn()
+        && key == request.auth.uid + '_' + request.resource.data.routeId
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.lastAt == request.time
+        && resource.data.lastAt < request.time - duration.value(10, 'm');
+    }
+
+    // Lost-item reports hold the reporter's name and phone: only the reporter
+    // and operators can read them; only operators can update or delete them.
+    match /lost_item_reports/{reportId} {
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'PENDING'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.description is string
+        && request.resource.data.description.size() > 0
+        && request.resource.data.description.size() <= 2000
+        && request.resource.data.contactName is string
+        && request.resource.data.contactName.size() <= 100
+        && request.resource.data.contactPhone is string
+        && request.resource.data.contactPhone.size() <= 30;
+      allow read: if operatorOnLine(resource.data.line)
+        || (signedIn() && resource.data.userId == request.auth.uid);
+      // Operators (of the report's line) may only change the resolution fields
+      // — never what the commuter reported. `resolvedAt` drives photo retention.
+      allow update: if operatorOnLine(resource.data.line)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'operatorNote', 'resolvedAt', 'statusUpdatedAt', 'statusUpdatedBy', 'statusUpdatedByEmail'])
+        && request.resource.data.status in ['PENDING', 'FOUND', 'RETURNED', 'CLOSED']
+        && (!('operatorNote' in request.resource.data)
+            || (request.resource.data.operatorNote is string
+                && request.resource.data.operatorNote.size() <= 1000))
+        && (request.resource.data.status in ['RETURNED', 'CLOSED']
+            ? request.resource.data.resolvedAt is timestamp
+            : (!('resolvedAt' in request.resource.data) || request.resource.data.resolvedAt == null))
+        && request.resource.data.statusUpdatedAt == request.time
+        && request.resource.data.statusUpdatedBy == request.auth.uid;
+      allow delete: if operatorOnLine(resource.data.line);
+    }
+
+    // Completed trips (NEX conductor app, buildTripObject → saveCompletedTrip).
+    // A conductor may create only their own trip, on their own bus line; trips
+    // are immutable afterwards. Only that conductor and the line's operators can read them.
+    match /trips/{tripId} {
+      allow create: if signedIn()
+        && callerProfile().role == 'conductor'
+        && request.resource.data.line == callerProfile().line
+        && request.resource.data.conductorId == request.auth.uid
+        && request.resource.data.tripId == tripId
+        && request.resource.data.status == 'completed'
+        // The bus must be a real `buses` doc, and busId must be its busNumber.
+        && request.resource.data.busId is string
+        && request.resource.data.busDocId is string
+        && exists(/databases/$(database)/documents/buses/$(request.resource.data.busDocId))
+        && get(/databases/$(database)/documents/buses/$(request.resource.data.busDocId)).data.busNumber
+             == request.resource.data.busId
+        // Times are Firestore Timestamps; createdAt is the server time.
+        && request.resource.data.startTime is timestamp
+        && request.resource.data.endTime is timestamp
+        && request.resource.data.arrivalTime is timestamp
+        && request.resource.data.endTime >= request.resource.data.startTime
+        && request.resource.data.endTime <= request.time + duration.value(5, 'm')
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.durationSeconds is int
+        && request.resource.data.durationSeconds >= 0
+        && request.resource.data.keys().hasOnly([
+             'tripId', 'busId', 'busDocId', 'conductorId', 'routeId', 'route', 'line',
+             'startTime', 'endTime', 'arrivalTime', 'createdAt', 'status',
+             'durationSeconds', 'durationFormatted', 'totalDistanceKm', 'averageSpeedKmh',
+             'startLatitude', 'startLongitude', 'endLatitude', 'endLongitude']);
+      allow read: if operatorOnLine(resource.data.line)
+        || (signedIn() && resource.data.conductorId == request.auth.uid);
+      allow delete: if operatorOnLine(resource.data.line);
+    }
+
+    // Fleet buses. Everyone signed in can read them (the NEX app's vehicle
+    // picker and trip saving need it); only operators manage the buses on
+    // their own line. busNumber and line never change after creation: trips
+    // (busDocId + busNumber) and live tracking (activeBuses/{busNumber}) key
+    // on them.
+    function busFieldsValid(data) {
+      return data.plateNumber is string
+        && data.plateNumber.size() >= 1 && data.plateNumber.size() <= 20
+        && data.model is string
+        && data.model.size() >= 1 && data.model.size() <= 60;
+    }
+
+    match /buses/{busId} {
+      allow read: if signedIn();
+      allow create: if operatorOnLine(request.resource.data.line)
+        && request.resource.data.busNumber is string
+        && request.resource.data.busNumber.size() >= 2
+        && request.resource.data.busNumber.size() <= 20
+        && busFieldsValid(request.resource.data)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.keys().hasOnly(['busNumber', 'plateNumber', 'model', 'line', 'createdAt', 'updatedAt']);
+      allow update: if operatorOnLine(resource.data.line)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['plateNumber', 'model', 'updatedAt'])
+        && busFieldsValid(request.resource.data)
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if operatorOnLine(resource.data.line);
+    }
+
+    // No catch-all: any collection not matched above is denied by default.
   }
 }

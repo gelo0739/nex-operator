@@ -6,9 +6,11 @@ import { Bus } from 'lucide-react';
  *  - 'start'    blue-ring dot   (use anchor="center")
  *  - 'waypoint' numbered dot    (use anchor="center")
  *  - 'end'      red teardrop    (anchor="bottom")
- *  - 'bus'      blue label pill (anchor="bottom")
+ *  - 'bus'      blue label pill (anchor="bottom"). `active` lifts it off the
+ *               map with a spring (focused bus); `dimmed` fades it (another
+ *               bus is focused).
  */
-export default function MapPin({ variant, label, draggable = false }) {
+export default function MapPin({ variant, label, draggable = false, active = false, dimmed = false }) {
   const grab = draggable ? 'cursor-grab active:cursor-grabbing' : '';
 
   if (variant === 'start') {
@@ -47,16 +49,39 @@ export default function MapPin({ variant, label, draggable = false }) {
     );
   }
 
-  // 'bus'
+  // 'bus' — the pin and its ground shadow animate together: when `active`, the
+  // pin springs up (and grows a little) while the shadow under its tip spreads
+  // and softens, so it reads as lifting off the map. Reversing `active` lets
+  // it settle back down. Reduced-motion users get the colour/ring change only.
+  const spring = 'transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] motion-reduce:transition-none';
   return (
-    <div className="flex flex-col items-center">
-      <div className="flex items-center gap-1.5 bg-blue-600 text-white text-[11px] font-bold pl-1.5 pr-2.5 py-1 rounded-full shadow-lg shadow-blue-600/30 whitespace-nowrap">
-        <span className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center">
-          <Bus className="w-3 h-3" />
-        </span>
-        {label}
+    <div className={`relative flex flex-col items-center pb-1 transition-opacity duration-300 ${dimmed ? 'opacity-55' : 'opacity-100'}`}>
+      <div
+        className={`flex flex-col items-center origin-bottom ${spring} ${
+          active ? '-translate-y-2 scale-110 motion-reduce:translate-y-0 motion-reduce:scale-100' : 'translate-y-0 scale-100'
+        }`}
+      >
+        <div
+          className={`flex items-center gap-1.5 text-white text-[11px] font-bold pl-1.5 pr-2.5 py-1 rounded-full whitespace-nowrap ${spring} ${
+            active
+              ? 'bg-blue-700 ring-4 ring-blue-500/30 shadow-2xl shadow-blue-900/40'
+              : 'bg-blue-600 shadow-lg shadow-blue-600/30 hover:bg-blue-700'
+          }`}
+        >
+          <span className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center">
+            <Bus className="w-3 h-3" />
+          </span>
+          {label}
+        </div>
+        <div className={`w-2 h-2 -mt-1 rotate-45 ${spring} ${active ? 'bg-blue-700' : 'bg-blue-600'}`} />
       </div>
-      <div className="w-2 h-2 -mt-1 rotate-45 bg-blue-600" />
+      {/* Ground shadow under the tip */}
+      <div
+        aria-hidden
+        className={`absolute bottom-0 h-1.5 rounded-full bg-slate-900 blur-[2px] ${spring} ${
+          active ? 'w-9 opacity-25' : 'w-3 opacity-30'
+        }`}
+      />
     </div>
   );
 }

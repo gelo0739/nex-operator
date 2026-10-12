@@ -1,62 +1,86 @@
 import { useState } from 'react';
-import { BusFront, FilePenLine, Radio, Trash2 } from 'lucide-react';
+import { AlertTriangle, BusFront, FilePenLine, Loader2, Lock, Radio, Trash2 } from 'lucide-react';
 import Modal from './Modal';
+
+// Must match the `buses` rules in firestore.rules.
+const BUS_NUMBER_PATTERN = /^[A-Z0-9][A-Z0-9-]{1,19}$/;
+const MAX_PLATE = 20;
+const MAX_MODEL = 60;
 
 const inputClass =
   'w-full rounded-xl border bg-slate-50 px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition-colors focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500';
+const readOnlyClass = 'cursor-not-allowed text-slate-500 focus:ring-0 focus:border-slate-200 focus:bg-slate-50';
 
-function Field({ label, error, children }) {
+function Field({ label, error, hint, children }) {
   return (
     <label className="flex flex-col gap-1.5">
       <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{label}</span>
       {children}
-      {error && <span className="text-xs text-red-600">{error}</span>}
+      {error ? <span className="text-xs text-red-600">{error}</span> : hint && <span className="text-[11px] text-slate-400">{hint}</span>}
     </label>
   );
 }
 
 /**
- * Add / edit form for a bus. `mode` is "add" or "edit".
- * In edit mode the Bus ID is read-only — it is the key that links the record
- * to its live entry in RTDB `activeBuses`.
+ * Add / edit form for a Firestore `buses` doc. `mode` is "add" or "edit".
+ * In edit mode the bus number is read-only — trips and live tracking
+ * (RTDB activeBuses/{busNumber}) are keyed on it. The bus line is always the
+ * operator's line. `onSave(data)` is async; an Error with `field` set is shown
+ * next to that field, any other error above the buttons.
  */
-export default function BusFormModal({ mode, bus, isActive, busLines, existingIds, onSave, onDelete, onClose }) {
+export default function BusFormModal({ mode, bus, isActive, line, onSave, onDelete, onClose }) {
   const isEdit = mode === 'edit';
   const [form, setForm] = useState({
-    busId: bus?.busId ?? '',
+    busNumber: bus?.busNumber ?? '',
     plateNumber: bus?.plateNumber ?? '',
     model: bus?.model ?? '',
-    busLine: bus?.busLine ?? busLines[0] ?? '',
   });
   const [errors, setErrors] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
 
   const updateField = (field) => (event) => {
     setForm((prev) => ({ ...prev, [field]: event.target.value }));
     setErrors((prev) => ({ ...prev, [field]: undefined }));
+    setSaveError(null);
   };
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
+    if (saving) return;
 
     const cleaned = {
-      busId: form.busId.trim().toUpperCase(),
+      busNumber: form.busNumber.trim().toUpperCase().replace(/\s+/g, '-'),
       plateNumber: form.plateNumber.trim().toUpperCase(),
       model: form.model.trim(),
-      busLine: form.busLine,
     };
 
     const nextErrors = {};
-    if (!cleaned.busId) nextErrors.busId = 'Bus ID is required.';
-    else if (!isEdit && existingIds.includes(cleaned.busId)) nextErrors.busId = 'A bus with this ID already exists.';
+    if (!isEdit) {
+      if (!cleaned.busNumber) nextErrors.busNumber = 'Bus ID is required.';
+      else if (!BUS_NUMBER_PATTERN.test(cleaned.busNumber)) {
+        nextErrors.busNumber = '2–20 characters: letters, numbers and dashes (e.g. BUS-004).';
+      }
+    }
     if (!cleaned.plateNumber) nextErrors.plateNumber = 'Plate number is required.';
+    else if (cleaned.plateNumber.length > MAX_PLATE) nextErrors.plateNumber = `At most ${MAX_PLATE} characters.`;
     if (!cleaned.model) nextErrors.model = 'Model is required.';
-    if (!cleaned.busLine) nextErrors.busLine = 'Bus line is required.';
+    else if (cleaned.model.length > MAX_MODEL) nextErrors.model = `At most ${MAX_MODEL} characters.`;
 
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
       return;
     }
-    onSave(cleaned);
+
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await onSave(cleaned);
+    } catch (error) {
+      if (error.field) setErrors({ [error.field]: error.message });
+      else setSaveError(error.message);
+      setSaving(false);
+    }
   };
 
   const borderFor = (field) => (errors[field] ? 'border-red-300' : 'border-slate-200');
@@ -64,22 +88,28 @@ export default function BusFormModal({ mode, bus, isActive, busLines, existingId
   return (
     <Modal
       icon={isEdit ? FilePenLine : BusFront}
-      title={isEdit ? `Edit ${bus.busId}` : 'Add New Bus'}
+      title={isEdit ? `Edit ${bus.busNumber}` : 'Add New Bus'}
       subtitle={isEdit ? 'Update this vehicle’s details.' : 'Register a new vehicle to your fleet.'}
-      onClose={onClose}
+      onClose={saving ? () => {} : onClose}
     >
       <form onSubmit={handleSubmit} noValidate>
         <div className="flex flex-col gap-4 p-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Field label="Bus ID" error={errors.busId}>
+            <Field
+              label="Bus ID"
+              error={errors.busNumber}
+              hint={isEdit ? 'Can’t be changed — trips and live tracking use it.' : 'Must be unique across the fleet.'}
+            >
               <input
                 type="text"
-                value={form.busId}
-                onChange={updateField('busId')}
+                value={form.busNumber}
+                onChange={updateField('busNumber')}
                 readOnly={isEdit}
+                disabled={saving}
                 placeholder="e.g. BUS-004"
+                maxLength={20}
                 autoFocus={!isEdit}
-                className={`${inputClass} ${borderFor('busId')} ${isEdit ? 'cursor-not-allowed text-slate-500 focus:ring-0 focus:border-slate-200 focus:bg-slate-50' : ''}`}
+                className={`${inputClass} ${borderFor('busNumber')} ${isEdit ? readOnlyClass : ''}`}
               />
             </Field>
             <Field label="Plate Number" error={errors.plateNumber}>
@@ -87,7 +117,9 @@ export default function BusFormModal({ mode, bus, isActive, busLines, existingId
                 type="text"
                 value={form.plateNumber}
                 onChange={updateField('plateNumber')}
+                disabled={saving}
                 placeholder="e.g. NX-1234"
+                maxLength={MAX_PLATE}
                 autoFocus={isEdit}
                 className={`${inputClass} ${borderFor('plateNumber')}`}
               />
@@ -99,21 +131,18 @@ export default function BusFormModal({ mode, bus, isActive, busLines, existingId
               type="text"
               value={form.model}
               onChange={updateField('model')}
+              disabled={saving}
               placeholder="e.g. Volta EV-X1"
+              maxLength={MAX_MODEL}
               className={`${inputClass} ${borderFor('model')}`}
             />
           </Field>
 
-          <Field label="Bus Line" error={errors.busLine}>
-            <select
-              value={form.busLine}
-              onChange={updateField('busLine')}
-              className={`${inputClass} ${borderFor('busLine')} cursor-pointer`}
-            >
-              {busLines.map((line) => (
-                <option key={line} value={line}>{line}</option>
-              ))}
-            </select>
+          <Field label="Bus Line" hint="Buses are added to your account’s bus line.">
+            <div className={`${inputClass} border-slate-200 ${readOnlyClass} flex items-center gap-2`}>
+              <Lock className="w-3.5 h-3.5 text-slate-400" />
+              {line || '—'}
+            </div>
           </Field>
 
           {isEdit && (
@@ -129,6 +158,13 @@ export default function BusFormModal({ mode, bus, isActive, busLines, existingId
               </span>
             </div>
           )}
+
+          {saveError && (
+            <div className="flex items-start gap-2 rounded-xl bg-red-50 border border-red-100 px-3 py-2.5 text-xs font-medium text-red-700">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
+              {saveError}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -137,7 +173,8 @@ export default function BusFormModal({ mode, bus, isActive, busLines, existingId
             <button
               type="button"
               onClick={onDelete}
-              className="flex items-center gap-2 text-xs font-semibold text-red-600 px-4 py-2.5 hover:bg-red-50 rounded-xl transition-colors cursor-pointer"
+              disabled={saving}
+              className="flex items-center gap-2 text-xs font-semibold text-red-600 px-4 py-2.5 hover:bg-red-50 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
             >
               <Trash2 className="w-4 h-4" />
               Delete Bus
@@ -147,14 +184,17 @@ export default function BusFormModal({ mode, bus, isActive, busLines, existingId
             <button
               type="button"
               onClick={onClose}
-              className="text-xs font-semibold text-slate-700 px-5 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+              disabled={saving}
+              className="text-xs font-semibold text-slate-700 px-5 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl border border-slate-200 transition-colors cursor-pointer disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="text-xs font-semibold text-white px-5 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-xl shadow-lg shadow-blue-600/30 transition-colors cursor-pointer"
+              disabled={saving}
+              className="flex items-center gap-2 text-xs font-semibold text-white px-5 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-xl shadow-lg shadow-blue-600/30 transition-colors cursor-pointer disabled:opacity-60"
             >
+              {saving && <Loader2 className="w-4 h-4 animate-spin" />}
               {isEdit ? 'Save Changes' : 'Add Bus'}
             </button>
           </div>
