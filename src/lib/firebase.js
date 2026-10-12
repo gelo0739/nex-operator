@@ -3,6 +3,7 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore } from "firebase/firestore";
 import { getDatabase } from "firebase/database";
 import { getStorage } from "firebase/storage";
+import { getFunctions } from "firebase/functions";
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_PUBLIC_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -20,3 +21,5 @@ export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const database = getDatabase(app);
 export const storage = getStorage(app);
+// Must match the region in functions/index.js (setGlobalOptions).
+export const functions = getFunctions(app, "asia-southeast1");

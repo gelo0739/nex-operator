@@ -1,0 +1,46 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOperator() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'operator';
+    }
+
+    // Routes: every signed-in user (commuters, conductors) can view them;
+    // only operators can create, edit or delete.
+    match /routes/{routeId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isOperator();
+    }
+
+    // Users: `role` and `line` are privileges, so only an operator may set or
+    // change them. Users can read their own profile; operators can read all.
+    // The mobile app's sign-up creates { email, role: "commuter", createdAt }.
+    match /users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isOperator());
+      allow create: if isOperator()
+        || (signedIn()
+            && request.auth.uid == userId
+            && request.resource.data.role == 'commuter'
+            && !('line' in request.resource.data));
+      allow update: if isOperator()
+        || (signedIn()
+            && request.auth.uid == userId
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'line']));
+      allow delete: if isOperator();
+    }
+
+    // Everything else (buses, trips, lost_item_reports, service_feedbacks, …)
+    // keeps the previous behavior: any signed-in user can read and write.
+    match /{collectionId}/{document=**} {
+      allow read, write: if signedIn() && !(collectionId in ['routes', 'users']);
+    }
+  }
+}

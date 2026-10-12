@@ -6,7 +6,7 @@ import { db, database } from "../lib/firebase";
 
 export const BUSES_COLLECTION = "buses";
 export const ROUTES_COLLECTION = "routes";
-export const USERS_COLLECTION = ""
+export const USERS_COLLECTION = "users";
 
 
 //get buses

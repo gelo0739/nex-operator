@@ -7,6 +7,7 @@ import Dashboard from "./(operator)/Dashboard";
 import ManageConductors from "./(operator)/ManageConductors";
 import ManageBus from "./(operator)/ManageBus";
 import ManageRoute from "./(operator)/ManageRoute";
+import ConfigureRoute from "./(operator)/ConfigureRoute";
 import PassengerFeedback from "./(operator)/PassengerFeedback";
 import LostItemReports from "./(operator)/LostItemReports";
 import EndOfTripReports from "./(operator)/EndOfTripReports";
@@ -17,6 +18,9 @@ const protectedRoutes = [
   { path: "/manage-conductors", element: <ManageConductors /> },
   { path: "/manage-bus", element: <ManageBus /> },
   { path: "/manage-route", element: <ManageRoute /> },
+  // Not in the sidebar; opened from Manage Route (Add New Route / pencil).
+  { path: "/manage-route/new", element: <ConfigureRoute /> },
+  { path: "/manage-route/:routeId/edit", element: <ConfigureRoute /> },
   { path: "/feedback", element: <PassengerFeedback /> },
   { path: "/lost-items", element: <LostItemReports /> },
   { path: "/end-reports", element: <EndOfTripReports /> },

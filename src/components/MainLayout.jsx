@@ -31,7 +31,7 @@ const navLinkClass = ({ isActive }) => `
   }
 `;
 
-export default function MainLayout({ children, pageTitle, pageSubtitle }) {
+export default function MainLayout({ children, pageTitle, pageSubtitle, headerAction }) {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
 
@@ -121,9 +121,12 @@ export default function MainLayout({ children, pageTitle, pageSubtitle }) {
         <main className="flex-1 p-8 pt-6 flex flex-col gap-6 overflow-y-auto">
           {/* Page Title Header */}
           {pageTitle && (
-            <div className="mb-2">
-              <h2 className="text-2xl font-bold text-slate-950 tracking-tight">{pageTitle}</h2>
-              {pageSubtitle && <p className="text-sm text-slate-600 mt-1">{pageSubtitle}</p>}
+            <div className="mb-2 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-950 tracking-tight">{pageTitle}</h2>
+                {pageSubtitle && <p className="text-sm text-slate-600 mt-1">{pageSubtitle}</p>}
+              </div>
+              {headerAction && <div className="shrink-0">{headerAction}</div>}
             </div>
           )}
           {children}

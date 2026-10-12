@@ -7,7 +7,8 @@ import {
   browserLocalPersistence,
   browserSessionPersistence,
 } from 'firebase/auth';
-import { auth } from '../lib/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
 
 const AuthContext = createContext(null);
 
@@ -15,21 +16,48 @@ const AuthContext = createContext(null);
  * Wraps the app and exposes the current Firebase user plus sign-in / sign-out
  * helpers. Accounts are provisioned manually in the Firebase console — there is
  * no registration or password-reset flow.
+ *
+ * Also subscribes to the signed-in user's Firestore profile (`users/{uid}`),
+ * which carries the operator's `role` and bus `line`.
  */
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [profileSnap, setProfileSnap] = useState({ uid: null, profile: null });
 
   useEffect(() => {
     return onAuthStateChanged(auth, (u) => {
       setUser(u);
-      setLoading(false);
+      setAuthLoading(false);
     });
   }, []);
+
+  const uid = user?.uid;
+
+  useEffect(() => {
+    if (!uid) return undefined;
+    return onSnapshot(
+      doc(db, 'users', uid),
+      (snapshot) => {
+        setProfileSnap({ uid, profile: snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null });
+      },
+      (error) => {
+        console.error('Failed to load user profile:', error);
+        setProfileSnap({ uid, profile: null });
+      },
+    );
+  }, [uid]);
+
+  // Only trust a snapshot that belongs to the current user.
+  const profileReady = !uid || profileSnap.uid === uid;
+  const profile = uid && profileReady ? profileSnap.profile : null;
+  const loading = authLoading || !profileReady;
 
   const value = useMemo(
     () => ({
       user,
+      profile,
+      busLine: profile?.line ?? null,
       loading,
       async signIn(email, password, rememberMe) {
         await setPersistence(
@@ -43,7 +71,7 @@ export function AuthProvider({ children }) {
         return fbSignOut(auth);
       },
     }),
-    [user, loading],
+    [user, profile, loading],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

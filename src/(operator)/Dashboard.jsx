@@ -1,6 +1,9 @@
 import MainLayout from "../components/MainLayout";
 import { Bus, Pause, FileText } from "lucide-react";
-import { GoogleMap, useJsApiLoader, MarkerF } from "@react-google-maps/api";
+import { GoogleMap } from "@react-google-maps/api";
+import useGoogleMaps, { MAP_ID } from "../hooks/useGoogleMaps";
+import AdvancedMarker from "../components/AdvancedMarker";
+import MapPin from "../components/MapPin";
 import useActiveBusCount from "../hooks/useActiveBusCount";
 import useBusCount from "../hooks/useBusCount";
 import usePendinglostItemCount from "../hooks/usePendingLostItemCount";
@@ -11,16 +14,14 @@ const MAP_CONTAINER_STYLE = {
   height: "100%",
   borderRadius: "1.25rem",
 };
+const MAP_OPTIONS = { mapId: MAP_ID };
 const BUS_LOCATIONS = [
   { id: "402", lat: 14.3294, lng: 120.9367, label: "Bus #402" },
   { id: "108", lat: 14.2251, lng: 120.975, label: "Bus #108" },
 ];
 
 export default function Dashboard() {
-  const { isLoaded } = useJsApiLoader({
-    id: "google-map-script",
-    googleMapsApiKey: import.meta.env.VITE_PUBLIC_GOOGLE_MAPS_API_KEY || "",
-  });
+  const { isLoaded } = useGoogleMaps();
 
   const totalBusCount = useBusCount();
   const activeBusCount = useActiveBusCount();
@@ -88,13 +89,16 @@ export default function Dashboard() {
             mapContainerStyle={MAP_CONTAINER_STYLE}
             center={MAP_CENTER}
             zoom={11}
+            options={MAP_OPTIONS}
           >
             {BUS_LOCATIONS.map((bus) => (
-              <MarkerF
+              <AdvancedMarker
                 key={bus.id}
                 position={{ lat: bus.lat, lng: bus.lng }}
                 title={bus.label}
-              />
+              >
+                <MapPin variant="bus" label={bus.label} />
+              </AdvancedMarker>
             ))}
           </GoogleMap>
         ) : (
