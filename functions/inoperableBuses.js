@@ -20,11 +20,11 @@
 // operators can read (the dashboard resolves conductorId → name itself).
 
 import { getDatabase } from "firebase-admin/database";
-import { FieldPath, FieldValue, getFirestore } from "firebase-admin/firestore";
-import { getMessaging } from "firebase-admin/messaging";
+import { getFirestore } from "firebase-admin/firestore";
 import { logger } from "firebase-functions";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
+import { collectTokens, sendToEntries } from "./push.js";
 
 // Set explicitly: this module is evaluated before index.js calls
 // setGlobalOptions, so the global region would not apply here.
@@ -33,25 +33,16 @@ const REGION = "asia-southeast1";
 const USERS = "users";
 const BUSES = "buses";
 const ROUTES = "routes";
-const PUSH_TOKENS = "push_tokens";
 
 const MINUTE_MS = 60 * 1000;
 const STALE_LIVE_ENTRY_MS = 10 * MINUTE_MS; // matches the takeover window in database.rules.json
 const ABANDONED_LIVE_ENTRY_MS = 30 * MINUTE_MS; // an "active" entry this old belongs to no running trip
 const NOTIFY_CLAIM_MS = 2 * MINUTE_MS; // one sender at a time per report
 const INOPERABLE_EXPIRY_MS = 24 * 60 * MINUTE_MS;
-const FCM_BATCH_SIZE = 500;
 
 // RTDB keys can't contain . $ # [ ] /
 const BUS_ID_PATTERN = /^[^.$#[\]/]{1,40}$/;
 const REPORT_ID_PATTERN = /^[A-Za-z0-9_-]{6,64}$/;
-
-// Tokens that will never work again — removed from push_tokens.
-const DEAD_TOKEN_ERRORS = new Set([
-  "messaging/registration-token-not-registered",
-  "messaging/invalid-registration-token",
-  "messaging/invalid-argument",
-]);
 
 // Returns the caller's { uid, line } if their profile has `role`, or throws.
 async function requireRole(request, role) {
@@ -95,52 +86,7 @@ async function collectRecipientTokens(line, excludeUid) {
     .filter((uid) => uid !== excludeUid);
   if (uids.length === 0) return { recipients: 0, entries: [] };
 
-  const snapshots = await db.getAll(...uids.map((uid) => db.collection(PUSH_TOKENS).doc(uid)));
-  const seen = new Set();
-  const entries = [];
-  for (const snapshot of snapshots) {
-    const tokens = snapshot.get("tokens");
-    if (!tokens || typeof tokens !== "object") continue;
-    for (const token of Object.keys(tokens)) {
-      if (seen.has(token)) continue;
-      seen.add(token);
-      entries.push({ uid: snapshot.id, token });
-    }
-  }
-  return { recipients: uids.length, entries };
-}
-
-// Sends `message` to every entry; prunes dead tokens. Returns the success count.
-async function sendToEntries(entries, message) {
-  const messaging = getMessaging();
-  const db = getFirestore();
-  let successCount = 0;
-  const dead = [];
-
-  for (let i = 0; i < entries.length; i += FCM_BATCH_SIZE) {
-    const batch = entries.slice(i, i + FCM_BATCH_SIZE);
-    const response = await messaging.sendEachForMulticast({
-      ...message,
-      tokens: batch.map((entry) => entry.token),
-    });
-    successCount += response.successCount;
-    response.responses.forEach((result, index) => {
-      if (!result.success && DEAD_TOKEN_ERRORS.has(result.error?.code)) dead.push(batch[index]);
-    });
-  }
-
-  await Promise.all(
-    dead.map(({ uid, token }) =>
-      db
-        .collection(PUSH_TOKENS)
-        .doc(uid)
-        .update(new FieldPath("tokens", token), FieldValue.delete())
-        .catch((error) => logger.warn("Could not prune push token", { uid, error: error.message })),
-    ),
-  );
-  if (dead.length > 0) logger.info(`Pruned ${dead.length} dead push token(s).`);
-
-  return successCount;
+  return { recipients: uids.length, entries: await collectTokens(uids) };
 }
 
 function buildMessage({ busId, routeId, routeName }) {

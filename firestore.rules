@@ -264,8 +264,9 @@ service cloud.firestore {
     // active. Created, notified and ended only by Cloud Functions (which
     // enforce the limits and measure the boarding point along the route). The
     // owner can read theirs and turn one off — status active → cancelled,
-    // removing the boarding point; operators of the route's line can read
-    // them for support.
+    // removing the boarding point and its along-route distance (the server
+    // does the same when it ends a watch); operators of the route's line can
+    // read them for support.
     match /arrivalWatches/{watchId} {
       allow read: if signedIn()
         && (resource.data.userId == request.auth.uid
@@ -278,8 +279,9 @@ service cloud.firestore {
         && request.resource.data.endReason == 'user'
         && request.resource.data.endedAt == request.time
         && !('boardingPoint' in request.resource.data)
+        && !('boardingAlong' in request.resource.data)
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['status', 'endReason', 'endedAt', 'boardingPoint']);
+             .hasOnly(['status', 'endReason', 'endedAt', 'boardingPoint', 'boardingAlong']);
     }
 
     // No catch-all: any collection not matched above is denied by default.

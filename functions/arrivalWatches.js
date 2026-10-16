@@ -9,6 +9,15 @@
 //     the commuter, the bus and the boarding point, works out how far along
 //     the route the boarding point is (never trusted from the client), and
 //     enforces one watch per bus and MAX_ACTIVE_WATCHES per commuter.
+//   onBusLocationWritten (RTDB trigger on activeBuses/{busId}) — on each live
+//     update of a WATCHED bus: "approaching" (≤ APPROACHING_METERS along the
+//     route), "arriving" (≤ ARRIVING_METERS, completes the watch), "passed",
+//     and ends the watches when the trip ends or the bus goes out of service.
+//     Each stage is claimed in a transaction before it is sent, so it goes
+//     out at most once. A bus nobody watches costs no Firestore read.
+//
+// When a watch ends, its boarding point (and its along-route distance) is
+// removed right away; the doc itself is deleted by cleanupArrivalWatches.
 //
 // Watch doc: { userId, line, busId, routeId, routeName, boardingPoint:
 // { lat, lng }, boardingLabel, boardingAlong, notifiedStages, status:
@@ -19,27 +28,42 @@
 import { getDatabase } from "firebase-admin/database";
 import { FieldValue, getFirestore, Timestamp } from "firebase-admin/firestore";
 import { logger } from "firebase-functions";
+import { onValueWritten } from "firebase-functions/v2/database";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 
 import {
   BOARDING_MAX_OFFSET_METERS,
+  BUS_ALONG_MEMORY_MS,
   BUS_STALE_MS,
   MAX_ACTIVE_WATCHES,
   PASSED_BUFFER_METERS,
   ROUTE_CACHE_MS,
   WATCH_TTL_MS,
+  WATCHED_CACHE_MS,
 } from "./arrivalConstants.js";
 import {
+  assessBus,
   buildRouteProfile,
+  describeNotification,
+  evaluateWatch,
   finiteOrNull,
   isValidCoordinates,
   projectOntoRoute,
   routeSpeedKmh,
 } from "./arrivalLogic.js";
+import { collectTokens, sendToEntries } from "./push.js";
 
 // Set explicitly: this module is evaluated before index.js calls
 // setGlobalOptions, so the global region would not apply here.
 const REGION = "asia-southeast1";
+// An RTDB trigger must run in its database's region — the default instance
+// (nex-71ab9-default-rtdb.firebaseio.com) is in us-central1.
+const DATABASE_REGION = "us-central1";
+
+// Android: the app's arrival channel (high importance, vibration, public on
+// the lock screen — created by the app; see its pushServices.js).
+const ARRIVAL_CHANNEL_ID = "nex-bus-arrival";
+const ARRIVAL_ALERT_TYPE = "bus_arrival";
 
 export const WATCHES = "arrivalWatches";
 const USERS = "users";
@@ -193,3 +217,202 @@ export const createArrivalWatch = onCall({ region: REGION }, async (request) => 
   logger.info("Arrival watch created", { uid, busId, routeId });
   return { watchId: watchRef.id, boardingAlong: boarding.along, expiresAt: expiresAtMs };
 });
+
+// ─── TRIGGER ────────────────────────────────────────────────────
+// Bus ids with at least one active watch, re-read at most every
+// WATCHED_CACHE_MS per instance — every activeBuses write (~every 5 s per
+// bus) triggers the function, and most buses have no watchers. A new watch
+// is picked up within that time.
+let watchedCache = { at: 0, ids: new Set(), pending: null };
+
+async function getWatchedBusIds() {
+  if (Date.now() - watchedCache.at < WATCHED_CACHE_MS) return watchedCache.ids;
+  if (!watchedCache.pending) {
+    watchedCache.pending = getFirestore()
+      .collection(WATCHES)
+      .where("status", "==", "active")
+      .select("busId")
+      .get()
+      .then((snapshot) => {
+        const ids = new Set(snapshot.docs.map((doc) => doc.get("busId")));
+        watchedCache = { at: Date.now(), ids, pending: null };
+        return ids;
+      })
+      .catch((error) => {
+        watchedCache.pending = null;
+        throw error;
+      });
+  }
+  return watchedCache.pending;
+}
+
+// A bus's last position along its route (per instance): keeps it on its own
+// carriageway where the road passes near itself (the U-turn past PITX).
+const busAlongMemory = new Map();
+
+function rememberedAlong(busId, routeId, now) {
+  const memory = busAlongMemory.get(busId);
+  return memory && memory.routeId === routeId && now - memory.at < BUS_ALONG_MEMORY_MS
+    ? memory.along
+    : undefined;
+}
+
+// Ends the watch / records the sent stages — only if it is still active and
+// the stage hasn't been sent yet (another invocation may have got there
+// first). Returns true if this invocation should send the notification.
+async function claimDecision(ref, decision) {
+  return getFirestore().runTransaction(async (tx) => {
+    const snapshot = await tx.get(ref);
+    const watch = snapshot.data();
+    if (!watch || watch.status !== "active") return false;
+    const sent = Array.isArray(watch.notifiedStages) ? watch.notifiedStages : [];
+    if (decision.action === "send" && sent.includes(decision.stage)) return false;
+
+    const update = {};
+    const marks = decision.markStages ?? (decision.stage ? [decision.stage] : []);
+    if (marks.length > 0) update.notifiedStages = FieldValue.arrayUnion(...marks);
+    if (decision.status && decision.status !== "active") {
+      update.status = decision.status;
+      update.endReason = decision.endReason;
+      update.endedAt = FieldValue.serverTimestamp();
+      // the boarding point is kept only while the watch is active
+      update.boardingPoint = FieldValue.delete();
+      update.boardingAlong = FieldValue.delete();
+    }
+    tx.update(ref, update);
+    return true;
+  });
+}
+
+function buildArrivalMessage({ kind, busId, routeId, routeName, minutes }) {
+  const text = describeNotification({ kind, busId, routeName, minutes });
+  if (!text) return null;
+  return {
+    notification: text,
+    data: { type: ARRIVAL_ALERT_TYPE, stage: kind, busId, routeId: routeId ?? "" },
+    android: {
+      priority: "high",
+      notification: {
+        channelId: ARRIVAL_CHANNEL_ID,
+        visibility: "public",
+        defaultSound: true,
+        defaultVibrateTimings: true,
+        // "arriving" replaces "approaching" for the same bus in the shade
+        tag: `nex-arrival-${busId}`,
+      },
+    },
+  };
+}
+
+// Claims each decision, then sends the notifications that were claimed —
+// identical messages (same text) go out in one multicast.
+async function applyDecisions(busId, items) {
+  const outgoing = new Map(); // message key → { message, uids }
+  for (const { ref, watch, decision } of items) {
+    let claimed = false;
+    try {
+      claimed = await claimDecision(ref, decision);
+    } catch (error) {
+      logger.error("Could not update arrival watch", { watchId: ref.id, error: error.message });
+    }
+    if (!claimed) continue;
+
+    const kind = decision.notify ?? decision.stage;
+    const message = kind
+      ? buildArrivalMessage({
+          kind,
+          busId,
+          routeId: watch.routeId,
+          routeName: watch.routeName,
+          minutes: decision.minutes,
+        })
+      : null;
+    if (!message) continue;
+    const key = JSON.stringify(message);
+    if (!outgoing.has(key)) outgoing.set(key, { message, uids: [] });
+    outgoing.get(key).uids.push(watch.userId);
+  }
+
+  for (const { message, uids } of outgoing.values()) {
+    try {
+      const entries = await collectTokens(uids);
+      const sent = entries.length > 0 ? await sendToEntries(entries, message) : 0;
+      logger.info("Arrival notification sent", { busId, stage: message.data.stage, users: uids.length, sent });
+    } catch (error) {
+      logger.error("Arrival notification failed", { busId, stage: message.data.stage, error: error.message });
+    }
+  }
+}
+
+export const onBusLocationWritten = onValueWritten(
+  { ref: "/activeBuses/{busId}", region: DATABASE_REGION, maxInstances: 10 },
+  async (event) => {
+    const { busId } = event.params;
+
+    let watched;
+    try {
+      watched = await getWatchedBusIds();
+    } catch (error) {
+      logger.error("Could not read watched buses", { error: error.message });
+      return;
+    }
+    if (!watched.has(busId)) return;
+
+    const snapshot = await getFirestore()
+      .collection(WATCHES)
+      .where("busId", "==", busId)
+      .where("status", "==", "active")
+      .get();
+    if (snapshot.empty) return;
+
+    const live = event.data.after.val();
+    const now = Date.now();
+    const items = [];
+
+    // trip ended / taken out of service: every watch on this bus ends
+    if (!live || live.status === "inoperable") {
+      const reason = live ? "inoperable" : "trip_ended";
+      for (const doc of snapshot.docs) {
+        items.push({
+          ref: doc.ref,
+          watch: doc.data(),
+          decision: { action: "end", status: "cancelled", endReason: reason, notify: reason },
+        });
+      }
+      busAlongMemory.delete(busId);
+      await applyDecisions(busId, items);
+      return;
+    }
+    if (live.status !== "active") return;
+
+    const busByRoute = new Map(); // routeId → assessBus result
+    for (const doc of snapshot.docs) {
+      const watch = doc.data();
+
+      // the bus started a trip on another route: this watch's trip is over
+      if (watch.routeId !== live.routeId) {
+        items.push({
+          ref: doc.ref,
+          watch,
+          decision: { action: "end", status: "cancelled", endReason: "trip_ended", notify: "trip_ended" },
+        });
+        continue;
+      }
+
+      const route = await loadRoute(watch.routeId);
+      if (!route) continue;
+      if (!busByRoute.has(route.id)) {
+        const bus = assessBus(live, route.profile, now, rememberedAlong(busId, route.id, now));
+        if (bus.usable) busAlongMemory.set(busId, { routeId: route.id, along: bus.along, at: now });
+        busByRoute.set(route.id, bus);
+      }
+      const bus = busByRoute.get(route.id);
+
+      // stale or on a detour: no stage from this update (expiry still applies)
+      const decision = evaluateWatch(watch, bus.usable ? bus.along : null, now, route.speedKmh);
+      if (decision.action !== "none") items.push({ ref: doc.ref, watch, decision });
+    }
+
+    if (items.length > 0) await applyDecisions(busId, items);
+  },
+);

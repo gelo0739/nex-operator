@@ -131,6 +131,29 @@ test("passed, expired, unusable input", () => {
   assert.equal(noSpeed.minutes, null);
 });
 
+test("a bus driving past: approaching once, arriving once, then nothing", () => {
+  // what onBusLocationWritten's claim transaction does to the watch
+  const apply = (w, decision) => {
+    if (decision.action === "none") return w;
+    const marks = decision.markStages ?? (decision.stage ? [decision.stage] : []);
+    return {
+      ...w,
+      notifiedStages: [...new Set([...w.notifiedStages, ...marks])],
+      status: decision.status && decision.status !== "active" ? decision.status : w.status,
+    };
+  };
+  let w = watch();
+  const sent = [];
+  // 5 km out to 1 km past, an update every ~35 m (25 km/h, 5 s)
+  for (let along = 15000; along <= 21000; along += 35) {
+    const decision = evaluateWatch(w, along, NOW, SPEED);
+    if (decision.action === "send") sent.push(decision.stage);
+    w = apply(w, decision);
+  }
+  assert.deepEqual(sent, [STAGE.APPROACHING, STAGE.ARRIVING]);
+  assert.equal(w.status, "completed");
+});
+
 test("message texts", () => {
   assert.deepEqual(
     describeNotification({ kind: STAGE.APPROACHING, busId: "NEX-1", routeName: "Alfonso - PITX", minutes: 3.4 }),
