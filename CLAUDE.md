@@ -46,6 +46,7 @@ npm run preview     # serve the production build
 npm run lint        # ESLint over **/*.{js,jsx}
 
 cd functions && npm i                       # Cloud Functions deps
+cd functions && npm test                    # Notify on Arrival logic tests (node --test, test/)
 firebase deploy --only functions            # deploy callable + scheduled functions
 firebase deploy --only firestore:rules      # deploy firestore.rules
 firebase deploy --only firestore:indexes    # deploy firestore.indexes.json
@@ -53,7 +54,8 @@ firebase deploy --only storage              # deploy storage.rules
 firebase deploy --only database             # deploy database.rules.json (RTDB)
 ```
 
-There is no test runner configured. Security-rule changes were verified with
+The only automated tests are the Notify on Arrival logic tests in `functions/test/` (pure
+module, real Alfonso → PITX polyline; `firebase.json` keeps `test/` out of the deploy). Security-rule changes were verified with
 `@firebase/rules-unit-testing` against the emulators
 (`firebase emulators:exec --only firestore --project demo-nex-rules "node test.mjs"` — on Windows
 chain several scripts with `&`, not `;`). Test before deploying rules.
@@ -71,6 +73,11 @@ functions/
   photoRetention.js            # scheduled: purgeOldPhotos (daily), purgeOrphanPhotos (weekly)
   inoperableBuses.js           # Mark as Inoperable: markBusInoperable, clearInoperableBus, expireInoperableBuses (hourly)
   accountDeletion.js           # deleteMyAccount — commuter self-service deletion (NEX app)
+  arrivalWatches.js            # Notify on Arrival: createArrivalWatch, onBusLocationWritten (RTDB trigger, us-central1), cleanupArrivalWatches (daily)
+  arrivalLogic.js              # pure: route projection (mirrors NEX etaEngine.js), evaluateWatch, notification texts
+  arrivalConstants.js          # Notify on Arrival thresholds
+  push.js                      # collectTokens + sendToEntries (FCM, dead-token pruning) — shared
+  test/                        # node --test for arrivalLogic.js (+ alfonsoPitx.json fixture)
 scripts/
   seedLegalDocuments.mjs       # uploads NEX legal docs (NEX/src/constants/legal/*.json) to legalDocuments — run by hand
   package.json                 # firebase-admin, firebase-functions (ESM, Node 22)
@@ -341,8 +348,14 @@ aggregation index variants too (missing → `failed-precondition`; the error mes
 exact index to create; `loadErrorMessage` shows "indexes are still building").
 
 - `push_tokens/{uid}` — FCM tokens `{ tokens: { <token>: { platform: "android" | "web",
-  updatedAt } }, updatedAt }`, written by their owner (NEX conductors, dashboard operators). No
-  client can read them — only `markBusInoperable` (Admin SDK), which prunes dead tokens.
+  updatedAt } }, updatedAt }`, written by their owner (NEX conductors and commuters, dashboard
+  operators). No client can read them — only the functions (`markBusInoperable`, the arrival
+  trigger; Admin SDK), which prune dead tokens.
+- `arrivalWatches/{uid}_{busId}` — Notify on Arrival: a commuter's boarding point for one bus
+  `{ userId, line, busId, routeId, routeName, boardingPoint: { lat, lng }, boardingLabel,
+  boardingAlong, notifiedStages, status: active | completed | cancelled | expired, endReason,
+  createdAt, expiresAt (+2 h), endedAt }`. Created only by `createArrivalWatch`; the boarding point
+  and `boardingAlong` are removed when the watch ends; docs deleted ~1 day after expiry.
 
 Realtime Database:
 - `activeBuses/{busNumber}` — `busId` (bus number), `conductorId` (uid), `routeId`, `routeName`,
@@ -395,6 +408,10 @@ Helpers: `isOperator()`, `callerProfile()`, `operatorOnLine(line)` (operator **a
   keys only; read = own conductor or operator on the line; no update; delete = operator on the line.
 - `push_tokens`: create/update/delete = own doc only (keys `tokens`, `updatedAt`; ≤ 20 tokens);
   read = never.
+- `arrivalWatches`: read = owner or operator on the watch's line; create/delete = never (server
+  only); update = owner, `active → cancelled` only, with `endReason == 'user'`, `endedAt ==
+  request.time` and `boardingPoint` / `boardingAlong` removed — `notifiedStages`, `completed`,
+  `expired` are server-only.
 
 ### Realtime Database (`database.rules.json`, deployed)
 
@@ -477,6 +494,29 @@ operator's `line`.
   `activeBuses` entries stuck in status `inoperable` for > 10 min, and `active` entries not updated for
   > 30 min (`ABANDONED_LIVE_ENTRY_MS` — a NEX phone that died or was killed mid-trip; it recreates its entry
   with its next update if it comes back).
+
+**Notify on Arrival** (`functions/arrivalWatches.js`, logic in `arrivalLogic.js`, thresholds in
+`arrivalConstants.js`; the NEX app's bell):
+- `createArrivalWatch({ busId, routeId, boardingPoint: { lat, lng }, boardingLabel? })` — commuter
+  only (no role claim, profile role `commuter`). Projects the boarding point onto the route's
+  `routeCoordinates` server-side (`boardingAlong`; refused if > 300 m off the route), refuses a bus
+  that is missing / stale (> 2 min) / inoperable / on another route / already past the point, and
+  in a transaction enforces ≤ 3 unexpired active watches per commuter (one per bus via the doc id).
+- `onBusLocationWritten` — RTDB `onValueWritten('/activeBuses/{busId}')`, **region us-central1**
+  (an RTDB trigger must be in its database's region; the default instance is us-central1). Runs on
+  every live update but returns before any Firestore read unless the bus has an active watch
+  (per-instance cache of watched bus ids, 15 s); routes cached per instance (10 min). Stale or
+  detour (> 300 m off the line) updates are ignored. Stages: approaching (≤ 1500 m along the route,
+  "about N min" from the route's `distanceMeters / durationSeconds × 0.8`), arriving (≤ 300 m,
+  completes), passed (completes), expired (silent); entry removed / status inoperable / bus on
+  another route → cancelled with a message. Each stage is claimed in a transaction before sending
+  (never twice). FCM: channel `nex-bus-arrival`, high priority, public visibility, tag per bus,
+  data `{ type: 'bus_arrival', stage, busId, routeId }`; identical messages share one multicast.
+  **Cost**: ~17k invocations per bus per day — on Blaze that's a few dollars a month at most.
+- `cleanupArrivalWatches` — daily 03:00 Manila: active-but-expired → `expired` (boarding point
+  removed); expired > 24 h → deleted. `deleteMyAccount` also deletes the commuter's watches.
+- `arrivalLogic.js` mirrors the NEX app's `src/utils/etaEngine.js` projection (earliest stretch
+  wins at the PITX U-turn) — **keep them in sync**.
 
 ## Maps
 
