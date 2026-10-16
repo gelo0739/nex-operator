@@ -69,6 +69,10 @@ database.rules.json            # Realtime Database rules (deployed)
 functions/
   index.js                     # callables: createConductor, resetConductorPassword, deleteConductor, completePasswordChange
   photoRetention.js            # scheduled: purgeOldPhotos (daily), purgeOrphanPhotos (weekly)
+  inoperableBuses.js           # Mark as Inoperable: markBusInoperable, clearInoperableBus, expireInoperableBuses (hourly)
+  accountDeletion.js           # deleteMyAccount — commuter self-service deletion (NEX app)
+scripts/
+  seedLegalDocuments.mjs       # uploads NEX legal docs (NEX/src/constants/legal/*.json) to legalDocuments — run by hand
   package.json                 # firebase-admin, firebase-functions (ESM, Node 22)
 src/
   main.jsx                     # React entry — mounts <App/>, imports index.css
@@ -79,12 +83,14 @@ src/
     realtime.js                # database (RTDB)   — imported only by code that needs it,
     storage.js                 # storage           — so each SDK lands in the chunk of the
     functions.js               # functions         — pages that use it
+    messaging.js               # FCM (web push)    — only via utils/pushServices.js (dynamic import)
     collections.js             # BUSES / ROUTES / USERS collection names (dependency-free)
   context/
     AuthContext.jsx            # <AuthProvider> + useAuth() — user, profile, busLine, isOperator, loading, signIn, signOut
   hooks/                       # live-data hooks — subscribe in useEffect, return a value, unsubscribe on cleanup
     useBuses.js                # Firestore `buses` on the line → { buses, loading, error }
     useLiveBuses.js            # RTDB `activeBuses`, fresh (< 5 min) + active, rechecked every 30 s — ALL lines
+    useInoperableBuses.js      # RTDB `inoperableBuses` on the line (buses marked inoperable by a conductor)
     useRoutes.js               # Firestore `routes` where line == busLine
     useConductors.js           # Firestore `users` where role == "conductor" && line == busLine
     useNewFeedback.js          # live `service_feedbacks` with status "new" on the line (bell)
@@ -99,6 +105,8 @@ src/
     routes.js                  # routeLabel(route, fallback), shortRouteName(name, separator)
     photos.js                  # resolvePhotoUrl(path, legacyUrl) — private Storage path or legacy URL
     activeBuses.js             # subscribeToActiveBuses (RTDB)
+    inoperableBuses.js         # subscribeToInoperableBuses (RTDB) + clearInoperableBus callable ("Return to service")
+    pushServices.js            # web push: enableWebPush (service worker + getToken → push_tokens/{uid}), disableWebPush
     busServices.js             # createBus / updateBus / deleteBus (line-scoped, unique busNumber)
     routeServices.js           # getRoute / createRoute / updateRoute / deleteRoute
     conductorServices.js       # callable wrappers (create / reset password / delete), updateConductor, generateTempPassword
@@ -152,6 +160,7 @@ src/
   assets/images/               # app icons / login background — currently unreferenced
 public/
   favicon.svg, icons.svg
+  firebase-messaging-sw.js     # FCM service worker (compat scripts from gstatic — keep the version = `firebase` package)
 .env                           # gitignored — Firebase + Google Maps keys (see "Environment")
 .env.example                   # committed template
 ```
@@ -216,9 +225,9 @@ parent highlighted). To add a page, add one entry to `navItems` **and** register
 
 | Label                    | Route                            | File                              | Status |
 | ------------------------ | -------------------------------- | --------------------------------- | ------ |
-| Fleet Overview           | `/dashboard`                     | `(operator)/Dashboard.jsx`        | live — Active / Inactive (line buses − live) / conductors / pending lost items; `FleetMap` of the line's live buses (click to focus + follow, route covered vs ahead, pop-up with speed, conductor, time on trip, route) |
+| Fleet Overview           | `/dashboard`                     | `(operator)/Dashboard.jsx`        | live — Active / Inactive (line buses − live) / conductors / pending lost items; red "N buses marked inoperable" strip with **Return to service** (ConfirmDialog → `clearInoperableBus`); `FleetMap` of the line's live buses (click to focus + follow, route covered vs ahead, pop-up with speed, conductor, time on trip, route) plus red inoperable pins (pop-up: reported by, route, since, Return to service) |
 | Manage Conductors        | `/manage-conductors`             | `(operator)/ManageConductors.jsx` | live — conductors on the line, status/bus from RTDB; filters, pagination; add / edit / reset password / delete |
-| Manage Bus               | `/manage-bus`                    | `(operator)/ManageBus.jsx`        | live — `buses` on the line, ACTIVE when live in RTDB; add / edit (plate, model) / delete (blocked while live) |
+| Manage Bus               | `/manage-bus`                    | `(operator)/ManageBus.jsx`        | live — `buses` on the line, ACTIVE when live in RTDB, INOPERABLE (red) when in `inoperableBuses`; **Mark as Inoperable** (not while on a route) / **Mark as Operable** in the edit pop-up's Status box (ConfirmDialog, then back to the pop-up); add / edit (plate, model) / delete (blocked while live) |
 | Manage Route             | `/manage-route`                  | `(operator)/ManageRoute.jsx`      | live — `routes` on the line; edit / delete (blocked while a live bus is on it) |
 | Configure Route (new)    | `/manage-route/new`              | `(operator)/ConfigureRoute.jsx`   | built — not in sidebar |
 | Configure Route (return) | `/manage-route/new?returnOf=:id` | `(operator)/ConfigureRoute.jsx`   | reached only from the editor's "Save & Create Return Route" — source reversed, same stop names, saved as a new route |
@@ -303,7 +312,8 @@ Firestore:
   `plateNumber`, `model`, `line`, `createdAt`/`updatedAt`. `busNumber` and `line` can't change.
 - `trips/{id}` — written by the NEX conductor app when a trip ends: `tripId`, `busId` (bus
   number), `busDocId` (verified against `buses`), `conductorId`, `routeId`, `route` (name), `line`,
-  `startTime` / `endTime` / `arrivalTime` (Timestamps), `createdAt`, `status`,
+  `startTime` / `endTime` / `arrivalTime` (Timestamps), `createdAt`, `status` (`completed`, or
+  `inoperable` when the trip was cut short by Mark as Inoperable),
   `durationSeconds` (int), `durationFormatted`, `totalDistanceKm`, `averageSpeedKmh`,
   `startLatitude/Longitude`, `endLatitude/Longitude`. Shown as `T-XXXXXX` (`tripRef()`).
 - `service_feedbacks/{id}` — written by the NEX commuter app: `rating` (int 1–5), `comment`
@@ -330,12 +340,26 @@ combination — `count()` doesn't. Adding a filter to the feedback or trips page
 aggregation index variants too (missing → `failed-precondition`; the error message contains the
 exact index to create; `loadErrorMessage` shows "indexes are still building").
 
+- `push_tokens/{uid}` — FCM tokens `{ tokens: { <token>: { platform: "android" | "web",
+  updatedAt } }, updatedAt }`, written by their owner (NEX conductors, dashboard operators). No
+  client can read them — only `markBusInoperable` (Admin SDK), which prunes dead tokens.
+
 Realtime Database:
 - `activeBuses/{busNumber}` — `busId` (bus number), `conductorId` (uid), `routeId`, `routeName`,
-  `lat`, `lng`, `speed` (km/h), `status: "active"`, `lastUpdated` (ms), `tripStartedAt` (ms).
+  `lat`, `lng`, `speed` (km/h), `status` (`"active"`; briefly `"inoperable"` + `inoperableAt` just
+  before the NEX app removes a bus marked inoperable), `lastUpdated` (ms), `tripStartedAt` (ms).
   Written by the NEX conductor app (and bus-simulator). A bus counts as live only if
   `status == "active"` and `lastUpdated` is < 5 min old (`useLiveBuses`). There is no `line` field
   — pages scope live buses to the line by `routeId` ∈ line routes or `conductorId` ∈ line conductors.
+- `inoperableBuses/{busNumber}` — buses taken out of service. Written only by Cloud Functions:
+  `source` (`"conductor"` via `markBusInoperable` | `"operator"` via `markBusInoperableByOperator`,
+  which sets `markedBy` and has no route / position / conductor), `busId`, `conductorId`, `line`, `routeId`, `routeName` (from
+  the routes doc), `lat`/`lng` (null if unknown), `status: "inoperable"`, `inoperableAt` (ms),
+  `reportId`, `tripId`, `notifiedAt`, `notifiedCount`. Removed by `clearInoperableBus`; conductor
+  reports also expire after 24 h (operator-set entries don't). No `conductorName`: every signed-in
+  NEX user (commuters too) can read this node, so the dashboard resolves `conductorId` → name from
+  `users` (entries written before this change may still carry one until they expire).
+  The NEX conductor map and this dashboard subscribe to the same node.
 
 ## Security rules
 
@@ -351,7 +375,12 @@ Helpers: `isOperator()`, `callerProfile()`, `operatorOnLine(line)` (operator **a
   self-registration as `commuter` only (no `line` / `mustChangePassword`); update = an operator may
   rename a conductor on their line (`name` only), and a user may edit their own doc except `role`,
   `line`, `mustChangePassword`, `passwordChangedAt`, `passwordResetAt`, `createdBy`; delete = never
-  (the `deleteConductor` function does it).
+  (the `deleteConductor` / `deleteMyAccount` functions do it). On create and own update,
+  `legalAcceptance` (`{ terms_commuter | terms_conductor | privacy_policy: { version, acceptedAt } }`)
+  is validated: only those keys, and a changed entry must be `{ version: int ≥ 1, acceptedAt ==
+  request.time }` (`legalAcceptanceOk`).
+- `legalDocuments`: read = anyone, even signed out (NEX sign-up shows them); write = never (seed
+  script, Admin SDK).
 - `service_feedbacks`: create = own `userId`, `status == "new"`, validated fields,
   `createdAt == request.time`, and the matching `feedback_rate_limits` doc in the same batch
   (`getAfter`); read = author or operator on the line; update = operator on the line, review fields
@@ -361,15 +390,19 @@ Helpers: `isOperator()`, `callerProfile()`, `operatorOnLine(line)` (operator **a
 - `lost_item_reports`: create = own `userId`, `status == "PENDING"`, length-checked fields; read =
   reporter or operator on the line; update = operator on the line, resolution fields only
   (`resolvedAt` a timestamp for RETURNED/CLOSED, null otherwise); delete = operator on the line.
-- `trips`: create = a conductor, own `conductorId`, own `line`, `busDocId` exists with the same
-  `busNumber`, Timestamp times, `createdAt == request.time`, known keys only; read = own conductor
-  or operator on the line; no update; delete = operator on the line.
+- `trips`: create = a conductor, own `conductorId`, own `line`, `status` `completed` | `inoperable`,
+  `busDocId` exists with the same `busNumber`, Timestamp times, `createdAt == request.time`, known
+  keys only; read = own conductor or operator on the line; no update; delete = operator on the line.
+- `push_tokens`: create/update/delete = own doc only (keys `tokens`, `updatedAt`; ≤ 20 tokens);
+  read = never.
 
 ### Realtime Database (`database.rules.json`, deployed)
 
 `activeBuses`: read = signed in; write = a **conductor** (`auth.token.role == "conductor"` custom
 claim) writing their own `conductorId`, or taking over an entry that's > 10 min stale; fields are
-validated and unknown children rejected. Tokens issued before the claim was set lack it — the NEX
+validated and unknown children rejected; `status` is `active` or `inoperable` (+ `inoperableAt`).
+A `status: "active"` write is refused while `inoperableBuses/{busId}` exists (no trips on an
+inoperable bus). `inoperableBuses`: read = signed in; write = never (Admin SDK only). Tokens issued before the claim was set lack it — the NEX
 app and bus-simulator force-refresh the ID token at trip start and retry once on
 `PERMISSION_DENIED`.
 
@@ -407,7 +440,16 @@ Operator-only account management that needs the Admin SDK lives in `functions/in
   write fails).
 - `resetConductorPassword({ uid, password })` → new temporary password, revokes sessions, sets
   `mustChangePassword: true`, `passwordResetAt`.
-- `deleteConductor({ uid })` → deletes the Auth user and `users/{uid}`.
+- `deleteConductor({ uid })` → deletes the Auth user, `users/{uid}` and `push_tokens/{uid}`
+  (trips are kept).
+- `deleteMyAccount()` (`accountDeletion.js`) — called by the NEX app as a **commuter** right after
+  re-authenticating (refused if `auth_time` is older than 5 min, or the caller has a `role` claim /
+  non-commuter profile). Deletes their photos (`feedback/{uid}/`, `lost_items/{uid}/`, legacy URL
+  files), anonymizes their `service_feedbacks` / `lost_item_reports` (removes `userId`, contact
+  fields, photo fields; sets `userDeleted: true`, `userDeletedAt`, `hasPhotos: false`), deletes
+  `feedback_rate_limits` / `push_tokens`, then `users/{uid}`, then the Auth user **last** — every
+  step is repeatable, so a failed run leaves a working account to retry with. The detail modals
+  show `userDeleted` reports as "Deleted account (anonymized)".
 - `completePasswordChange()` — called by the NEX app (as the conductor) after `updatePassword`.
   Requires `mustChangePassword === true` and that the account's `tokensValidAfterTime` is newer
   than `passwordResetAt` (or `createdAt`) — i.e. the password really changed — then clears the
@@ -415,6 +457,26 @@ Operator-only account management that needs the Admin SDK lives in `functions/in
 
 The operator callables check the caller is an operator and the target conductor is on the
 operator's `line`.
+
+**Mark as Inoperable** (`functions/inoperableBuses.js`):
+- `markBusInoperable({ reportId, busId, routeId?, lat?, lng?, tripId?, inoperableAt? })` — called by
+  the NEX app (as the conductor). Requires a conductor with a `line`, a `buses` doc with that
+  `busNumber` on the line, and that the bus's live entry is theirs (or missing / > 10 min stale).
+  Writes `inoperableBuses/{busId}` in a transaction, then pushes "Bus X marked inoperable" to every
+  `push_tokens` token of the line's operators and other conductors (FCM, Android channel
+  `nex-alerts`; optional `DASHBOARD_URL` env adds the web click link) and prunes dead tokens.
+  Idempotent per `reportId` (a `notifyClaimedAt` claim stops overlapping retries from notifying
+  twice). If the push fails it returns `{ notifyFailed: true }` — the entry is already written and
+  the app retries the send later.
+- `markBusInoperableByOperator({ busId })` — operator, bus on their line (Manage Bus "Mark
+  inoperable"). Refused (`failed-precondition`) while the bus has a fresh active live entry — its
+  conductor marks it from the app instead. No push. `{ alreadyInoperable: true }` if already out of service.
+- `clearInoperableBus({ busId })` — operator on the entry's line ("Return to service" / "Mark operable"); also
+  removes a leftover `activeBuses` entry in status `inoperable`.
+- `expireInoperableBuses` — hourly: removes conductor-reported `inoperableBuses` entries older than 24 h,
+  `activeBuses` entries stuck in status `inoperable` for > 10 min, and `active` entries not updated for
+  > 30 min (`ABANDONED_LIVE_ENTRY_MS` — a NEX phone that died or was killed mid-trip; it recreates its entry
+  with its next update if it comes back).
 
 ## Maps
 
@@ -434,9 +496,10 @@ operator's `line`.
 
 Pages are `React.lazy` chunks. `vite.config.js` puts the always-needed Firebase core (app / auth /
 firestore) in its own `firebase` chunk (~550 kB, ~163 kB gzip — the warning limit is 600 kB).
-RTDB, Storage and Functions SDKs are only imported via `lib/realtime`, `lib/storage`
-(dynamically, through `utils/photos.js`) and `lib/functions`, so they load with the pages that need
-them. Keep it that way: **don't import `lib/realtime` / `lib/storage` / `lib/functions` from
+RTDB, Storage, Functions and Messaging SDKs are only imported via `lib/realtime`, `lib/storage`
+(dynamically, through `utils/photos.js`), `lib/functions` and `lib/messaging` (dynamically, through
+`utils/pushServices.js` — AppShell registers for push after sign-in, AuthContext unregisters on
+sign-out), so they load with the pages that need them. Keep it that way: **don't import `lib/realtime` / `lib/storage` / `lib/functions` from
 anything the shell always loads** (AuthContext, AppShell, NotificationBell, `utils/feedback.js`,
 `lib/collections.js`).
 
@@ -455,7 +518,11 @@ VITE_PUBLIC_FIREBASE_STORAGE_BUCKET=...
 VITE_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=...
 VITE_PUBLIC_FIREBASE_APP_ID=...
 VITE_PUBLIC_FIREBASE_MEASUREMENT_ID=...
+VITE_PUBLIC_FIREBASE_VAPID_KEY=...      # optional; web push (Cloud Messaging → Web Push certificates)
 ```
+
+Web push: with a VAPID key, AppShell registers quietly if notifications are already allowed, or
+shows an **Enable alerts** button (the permission prompt must come from a click).
 
 `.env` is gitignored (`.env.example` is the committed template). It was previously committed
 with real keys — those live in git history, so **rotate the Google Maps key** and restrict it by

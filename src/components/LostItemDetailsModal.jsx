@@ -78,11 +78,13 @@ export default function LostItemDetailsModal({ report, onClose, onStatusSaved })
     }
   };
 
-  const reporterText = !report.userId
-    ? 'Not recorded (older report)'
-    : !reporter.loaded
-      ? 'Loading…'
-      : reporter.email || 'Deleted account';
+  const reporterText = report.userDeleted
+    ? 'Deleted account (anonymized)'
+    : !report.userId
+      ? 'Not recorded (older report)'
+      : !reporter.loaded
+        ? 'Loading…'
+        : reporter.email || 'Deleted account';
 
   return (
     <Modal

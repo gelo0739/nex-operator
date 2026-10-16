@@ -18,6 +18,11 @@ export default defineConfig([
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
   },
+  // FCM service worker: worker globals + the compat `firebase` global it imports.
+  {
+    files: ['public/firebase-messaging-sw.js'],
+    languageOptions: { globals: { ...globals.serviceworker, firebase: 'readonly' } },
+  },
   // Cloud Functions run on Node, not in the browser.
   {
     files: ['functions/**/*.js'],

@@ -1,17 +1,46 @@
-import { Bus } from 'lucide-react';
+import { Bus, TriangleAlert } from 'lucide-react';
 
 /**
  * Custom map pin designs, rendered inside <AdvancedMarker>.
  * Variants:
- *  - 'start'    blue-ring dot   (use anchor="center")
- *  - 'waypoint' numbered dot    (use anchor="center")
- *  - 'end'      red teardrop    (anchor="bottom")
- *  - 'bus'      blue label pill (anchor="bottom"). `active` lifts it off the
- *               map with a spring (focused bus); `dimmed` fades it (another
- *               bus is focused).
+ *  - 'start'      blue-ring dot   (use anchor="center")
+ *  - 'waypoint'   numbered dot    (use anchor="center")
+ *  - 'end'        red teardrop    (anchor="bottom")
+ *  - 'bus'        blue label pill (anchor="bottom"). `active` lifts it off the
+ *                 map with a spring (focused bus); `dimmed` fades it (another
+ *                 bus is focused).
+ *  - 'inoperable' red label pill with a warning icon (anchor="bottom") — a bus
+ *                 marked inoperable. `active` / `dimmed` as for 'bus'.
  */
 export default function MapPin({ variant, label, draggable = false, active = false, dimmed = false }) {
   const grab = draggable ? 'cursor-grab active:cursor-grabbing' : '';
+
+  if (variant === 'inoperable') {
+    return (
+      <div className={`relative flex flex-col items-center pb-1 transition-opacity duration-300 ${dimmed ? 'opacity-55' : 'opacity-100'}`}>
+        <div
+          className={`flex flex-col items-center origin-bottom transition-transform duration-300 motion-reduce:transition-none ${
+            active ? '-translate-y-2 scale-110 motion-reduce:translate-y-0 motion-reduce:scale-100' : ''
+          }`}
+        >
+          <div
+            className={`flex items-center gap-1.5 text-white text-[11px] font-bold pl-1.5 pr-2.5 py-1 rounded-full whitespace-nowrap ${
+              active
+                ? 'bg-red-700 ring-4 ring-red-500/30 shadow-2xl shadow-red-900/40'
+                : 'bg-red-600 shadow-lg shadow-red-600/30 hover:bg-red-700'
+            }`}
+          >
+            <span className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center">
+              <TriangleAlert className="w-3 h-3" />
+            </span>
+            {label} · Inoperable
+          </div>
+          <div className={`w-2 h-2 -mt-1 rotate-45 ${active ? 'bg-red-700' : 'bg-red-600'}`} />
+        </div>
+        <div aria-hidden className="absolute bottom-0 w-3 h-1.5 rounded-full bg-slate-900 blur-[2px] opacity-30" />
+      </div>
+    );
+  }
 
   if (variant === 'start') {
     return (

@@ -35,7 +35,7 @@ const daysAgo = (days) => Timestamp.fromMillis(Date.now() - days * DAY_MS);
 // Legacy docs store a token download URL:
 //   https://firebasestorage.googleapis.com/v0/b/<bucket>/o/<encoded path>?alt=media&token=…
 // Returns the object path if the URL points at our bucket, else null.
-function pathFromDownloadUrl(url, bucketName) {
+export function pathFromDownloadUrl(url, bucketName) {
   if (typeof url !== "string") return null;
   const match = url.match(/\/v0\/b\/([^/]+)\/o\/([^?]+)/);
   if (!match || match[1] !== bucketName) return null;
@@ -46,7 +46,7 @@ function pathFromDownloadUrl(url, bucketName) {
   }
 }
 
-async function deleteFile(bucket, path) {
+export async function deleteFile(bucket, path) {
   try {
     await bucket.file(path).delete();
     return true;

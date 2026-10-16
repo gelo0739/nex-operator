@@ -92,7 +92,18 @@ export function AuthProvider({ children }) {
         }
         return cred.user;
       },
-      signOut() {
+      async signOut() {
+        // Stop this browser's pushes first (needs the signed-in user). Loaded
+        // on demand so the messaging SDK stays out of the shell bundle.
+        const uid = auth.currentUser?.uid;
+        try {
+          if (localStorage.getItem('nex_push_token')) {
+            const { disableWebPush } = await import('../utils/pushServices');
+            await disableWebPush(uid);
+          }
+        } catch (error) {
+          console.warn('Could not unregister push notifications:', error);
+        }
         return fbSignOut(auth);
       },
     }),

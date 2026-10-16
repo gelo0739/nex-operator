@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertTriangle, BusFront, FilePenLine, Loader2, Lock, Radio, Trash2 } from 'lucide-react';
+import { AlertTriangle, BusFront, FilePenLine, Loader2, Lock, Radio, Trash2, TriangleAlert, Wrench } from 'lucide-react';
 import Modal from './Modal';
 
 // Must match the `buses` rules in firestore.rules.
@@ -27,8 +27,11 @@ function Field({ label, error, hint, children }) {
  * (RTDB activeBuses/{busNumber}) are keyed on it. The bus line is always the
  * operator's line. `onSave(data)` is async; an Error with `field` set is shown
  * next to that field, any other error above the buttons.
+ * In edit mode the Status box also sets the bus inoperable / operable:
+ * `inoperable` is its RTDB inoperableBuses entry (or null), and
+ * `onChangeStatus('inoperable' | 'operable')` opens the confirm.
  */
-export default function BusFormModal({ mode, bus, isActive, line, onSave, onDelete, onClose }) {
+export default function BusFormModal({ mode, bus, isActive, inoperable, line, onSave, onDelete, onChangeStatus, onClose }) {
   const isEdit = mode === 'edit';
   const [form, setForm] = useState({
     busNumber: bus?.busNumber ?? '',
@@ -146,16 +149,62 @@ export default function BusFormModal({ mode, bus, isActive, line, onSave, onDele
           </Field>
 
           {isEdit && (
-            <div className="flex items-center gap-3 rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
-              <Radio className="w-4 h-4 text-slate-400 shrink-0" />
-              <p className="flex-1 text-xs text-slate-500">Status is set automatically from live tracking.</p>
-              <span
-                className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${
-                  isActive ? 'bg-emerald-50 text-emerald-700' : 'bg-orange-50 text-orange-600'
-                }`}
-              >
-                {isActive ? 'Active' : 'Inactive'}
-              </span>
+            <div
+              className={`flex flex-col gap-3 rounded-xl border px-4 py-3 ${
+                inoperable ? 'bg-red-50/60 border-red-100' : 'bg-slate-50 border-slate-100'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                {inoperable ? (
+                  <TriangleAlert className="w-4 h-4 text-red-500 shrink-0" />
+                ) : (
+                  <Radio className="w-4 h-4 text-slate-400 shrink-0" />
+                )}
+                <p className="flex-1 text-xs text-slate-500">
+                  {inoperable
+                    ? inoperable.source === 'operator'
+                      ? 'Out of service — set inoperable by an operator. No trips can start until it’s marked operable.'
+                      : 'Out of service — reported inoperable by a conductor. No trips can start until it’s marked operable.'
+                    : isActive
+                      ? 'On a route right now. To take it out of service, its conductor marks it inoperable from the NEX app.'
+                      : 'Active / Inactive is set automatically from live tracking.'}
+                </p>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${
+                    inoperable
+                      ? 'bg-red-50 text-red-700'
+                      : isActive
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : 'bg-orange-50 text-orange-600'
+                  }`}
+                >
+                  {inoperable ? 'Inoperable' : isActive ? 'Active' : 'Inactive'}
+                </span>
+              </div>
+              <div className="flex justify-end">
+                {inoperable ? (
+                  <button
+                    type="button"
+                    onClick={() => onChangeStatus('operable')}
+                    disabled={saving}
+                    className="flex items-center gap-2 text-xs font-semibold text-emerald-700 px-4 py-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    <Wrench className="w-3.5 h-3.5" />
+                    Mark as Operable
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onChangeStatus('inoperable')}
+                    disabled={saving || isActive}
+                    title={isActive ? 'It’s on a route — its conductor marks it inoperable from the NEX app' : undefined}
+                    className="flex items-center gap-2 text-xs font-semibold text-red-700 px-4 py-2 bg-red-50 hover:bg-red-100 border border-red-100 rounded-xl transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <TriangleAlert className="w-3.5 h-3.5" />
+                    Mark as Inoperable
+                  </button>
+                )}
+              </div>
             </div>
           )}
 

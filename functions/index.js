@@ -19,6 +19,18 @@ setGlobalOptions({ region: "asia-southeast1", maxInstances: 10 });
 // Scheduled photo retention (see photoRetention.js).
 export { purgeOldPhotos, purgeOrphanPhotos } from "./photoRetention.js";
 
+// Commuter self-service account deletion (see accountDeletion.js).
+export { deleteMyAccount } from "./accountDeletion.js";
+
+// Mark as Inoperable: conductor report + push, operator set / return to
+// service, 24 h expiry of conductor reports (see inoperableBuses.js).
+export {
+  markBusInoperable,
+  markBusInoperableByOperator,
+  clearInoperableBus,
+  expireInoperableBuses,
+} from "./inoperableBuses.js";
+
 const db = getFirestore();
 const auth = getAuth();
 
@@ -164,6 +176,9 @@ export const deleteConductor = onCall(async (request) => {
   }
 
   await ref.delete();
+  // the Privacy Policy promises notification tokens go with the account;
+  // trip records are kept (operator records, see the policy's retention)
+  await db.collection("push_tokens").doc(uid).delete();
   return { ok: true };
 });
 

@@ -59,11 +59,13 @@ export default function FeedbackDetailsModal({ feedback, onClose, onReviewSaved 
     };
   }, [feedback.userId]);
 
-  const submitterText = !feedback.userId
-    ? 'Unknown'
-    : submitter.state === 'loading'
-      ? 'Loading…'
-      : submitter.email || 'Deleted account';
+  const submitterText = feedback.userDeleted
+    ? 'Deleted account (anonymized)'
+    : !feedback.userId
+      ? 'Unknown'
+      : submitter.state === 'loading'
+        ? 'Loading…'
+        : submitter.email || 'Deleted account';
 
   const categories = feedbackCategories(feedback);
 

@@ -32,11 +32,43 @@ service cloud.firestore {
       allow delete: if operatorOnLine(resource.data.line);
     }
 
+    // Legal documents (Terms & Conditions, Privacy Policy): readable by anyone,
+    // signed in or not (the NEX sign-up screen shows them). Published with the
+    // Admin SDK (nex-operator scripts/seedLegalDocuments.mjs) — no client writes.
+    match /legalDocuments/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // users/{uid}.legalAcceptance = { <docId>: { version, acceptedAt } } —
+    // which version of each legal document the user accepted, and when
+    // (server time). An entry may only change to a valid, freshly-timestamped
+    // acceptance; entries can't be back-dated or written with other fields.
+    function legalAcceptanceEntryOk(after, before, docId) {
+      return !(docId in after)
+        || (docId in before && after[docId] == before[docId])
+        || (after[docId] is map
+            && after[docId].keys().hasOnly(['version', 'acceptedAt'])
+            && after[docId].version is int
+            && after[docId].version >= 1
+            && after[docId].acceptedAt == request.time);
+    }
+
+    function legalAcceptanceOk(data, before) {
+      return !('legalAcceptance' in data)
+        || (data.legalAcceptance is map
+            && data.legalAcceptance.keys().hasOnly(['terms_commuter', 'terms_conductor', 'privacy_policy'])
+            && legalAcceptanceEntryOk(data.legalAcceptance, before, 'terms_commuter')
+            && legalAcceptanceEntryOk(data.legalAcceptance, before, 'terms_conductor')
+            && legalAcceptanceEntryOk(data.legalAcceptance, before, 'privacy_policy'));
+    }
+
     // Users. Everyone reads their own profile. Operators read users on their
     // line, plus commuters (feedback / lost-item submitter emails). Privileges
     // (role, line) and the password-change bookkeeping are server-only: conductor
     // accounts are created/reset by Cloud Functions, and completePasswordChange
-    // clears mustChangePassword. The NEX sign-up creates { email, role: "commuter", createdAt }.
+    // clears mustChangePassword. The NEX sign-up creates { email, role: "commuter",
+    // createdAt, legalAcceptance }; users later add acceptances of new versions.
     match /users/{userId} {
       allow read: if signedIn()
         && (request.auth.uid == userId
@@ -46,7 +78,8 @@ service cloud.firestore {
         && request.auth.uid == userId
         && request.resource.data.role == 'commuter'
         && !('line' in request.resource.data)
-        && !('mustChangePassword' in request.resource.data);
+        && !('mustChangePassword' in request.resource.data)
+        && legalAcceptanceOk(request.resource.data, {});
       allow update: if
         // An operator may rename a conductor on their own line — nothing else.
         (operatorOnLine(resource.data.line)
@@ -57,8 +90,10 @@ service cloud.firestore {
         || (signedIn()
           && request.auth.uid == userId
           && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-               'role', 'line', 'mustChangePassword', 'passwordChangedAt', 'passwordResetAt', 'createdBy']));
-      allow delete: if false; // accounts are deleted by the deleteConductor function
+               'role', 'line', 'mustChangePassword', 'passwordChangedAt', 'passwordResetAt', 'createdBy'])
+          && legalAcceptanceOk(request.resource.data, resource.data.get('legalAcceptance', {})));
+      // accounts are deleted by the deleteConductor / deleteMyAccount functions
+      allow delete: if false;
     }
 
     // Rate-limit doc for (user, route): written in the same batch as each
@@ -156,7 +191,8 @@ service cloud.firestore {
         && request.resource.data.line == callerProfile().line
         && request.resource.data.conductorId == request.auth.uid
         && request.resource.data.tripId == tripId
-        && request.resource.data.status == 'completed'
+        // 'inoperable' = the trip was cut short by Mark as Inoperable.
+        && request.resource.data.status in ['completed', 'inoperable']
         // The bus must be a real `buses` doc, and busId must be its busNumber.
         && request.resource.data.busId is string
         && request.resource.data.busDocId is string
@@ -208,6 +244,19 @@ service cloud.firestore {
         && busFieldsValid(request.resource.data)
         && request.resource.data.updatedAt == request.time;
       allow delete: if operatorOnLine(resource.data.line);
+    }
+
+    // Push (FCM) tokens: { tokens: { <token>: { platform, updatedAt } }, updatedAt }.
+    // Each user writes only their own doc; nobody can read tokens from a
+    // client — only the Admin SDK (markBusInoperable) reads them to send pushes.
+    match /push_tokens/{userId} {
+      allow read: if false;
+      allow create, update: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['tokens', 'updatedAt'])
+        && request.resource.data.tokens is map
+        && request.resource.data.tokens.size() <= 20;
+      allow delete: if signedIn() && request.auth.uid == userId;
     }
 
     // No catch-all: any collection not matched above is denied by default.

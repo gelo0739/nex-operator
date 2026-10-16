@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useRef } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Bus,
@@ -11,6 +11,7 @@ import {
   Map,
   LogOut,
   Loader2,
+  BellRing,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import NotificationBell from './NotificationBell';
@@ -25,7 +26,15 @@ const navItems = [
   { id: 'end-reports', label: 'End of Trip Reports', icon: BarChart3, path: '/end-reports' },
 ];
 
-const navLinkClass = ({ isActive }) => `
+// Web push needs a VAPID key (Firebase console → Cloud Messaging → Web Push
+// certificates) and a browser with service workers + notifications.
+const PUSH_CONFIGURED =
+  Boolean(import.meta.env.VITE_PUBLIC_FIREBASE_VAPID_KEY) &&
+  typeof window !== 'undefined' &&
+  'serviceWorker' in navigator &&
+  'Notification' in window;
+
+const navLinkClass =({ isActive }) => `
   w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all
   ${isActive
     ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20'
@@ -49,6 +58,37 @@ export default function AppShell() {
   useEffect(() => {
     mainRef.current?.scrollTo({ top: 0 });
   }, [pathname]);
+
+  // Web push ("bus marked inoperable"). Already allowed → register quietly;
+  // not decided yet → offer an "Enable alerts" button (browsers only allow the
+  // permission prompt from a click). pushServices is loaded on demand.
+  const uid = user?.uid;
+  const [showEnableAlerts, setShowEnableAlerts] = useState(false);
+  useEffect(() => {
+    if (!uid || !PUSH_CONFIGURED) return undefined;
+    let cancelled = false;
+    const permission = Notification.permission;
+    if (permission === 'granted') {
+      import('../utils/pushServices')
+        .then(({ enableWebPush }) => enableWebPush(uid))
+        .catch((error) => console.warn('Push registration failed:', error));
+    } else if (permission === 'default') {
+      Promise.resolve().then(() => !cancelled && setShowEnableAlerts(true));
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [uid]);
+
+  const handleEnableAlerts = async () => {
+    try {
+      const { enableWebPush } = await import('../utils/pushServices');
+      const result = await enableWebPush(uid, { prompt: true });
+      if (result !== 'default') setShowEnableAlerts(false);
+    } catch (error) {
+      console.warn('Push registration failed:', error);
+    }
+  };
 
   const handleSignOut = async () => {
     await signOut();
@@ -111,6 +151,19 @@ export default function AppShell() {
 
         {/* TOP HEADER */}
         <header className="h-16 px-8 flex items-center justify-end gap-5 bg-[#f4f6fa] relative z-20">
+
+          {/* Push alerts for buses marked inoperable — until allowed or blocked */}
+          {showEnableAlerts && (
+            <button
+              type="button"
+              onClick={handleEnableAlerts}
+              title="Get a browser notification when a conductor marks a bus inoperable"
+              className="flex items-center gap-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 px-3.5 py-2 rounded-xl transition-colors cursor-pointer"
+            >
+              <BellRing className="w-3.5 h-3.5" />
+              Enable alerts
+            </button>
+          )}
 
           {/* Notification Bell — live count of new passenger feedback */}
           <NotificationBell />

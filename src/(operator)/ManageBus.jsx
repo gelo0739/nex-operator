@@ -7,9 +7,25 @@ import Modal from '../components/Modal';
 import { useAuth } from '../context/AuthContext';
 import useBuses from '../hooks/useBuses';
 import useLiveBuses from '../hooks/useLiveBuses';
+import useInoperableBuses from '../hooks/useInoperableBuses';
 import { createBus, deleteBus, updateBus } from '../utils/busServices';
+import { clearInoperableBus, markBusInoperable } from '../utils/inoperableBuses';
 
-function StatusBadge({ live }) {
+function StatusBadge({ live, inoperable }) {
+  if (inoperable) {
+    return (
+      <span
+        title={
+          inoperable.source === 'operator'
+            ? 'Set inoperable by an operator — no trips until it is marked operable'
+            : `Marked inoperable by a conductor${inoperable.routeName ? ` on ${inoperable.routeName}` : ''} — no trips until it is marked operable`
+        }
+        className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide bg-red-50 text-red-700"
+      >
+        Inoperable
+      </span>
+    );
+  }
   const active = Boolean(live);
   const title = active
     ? `On route${live.routeName ? `: ${live.routeName}` : ''} — live location received in the last 5 minutes`
@@ -33,19 +49,33 @@ export default function ManageBus() {
   // (status "active", reported within 5 min), keyed by its bus number.
   const liveBuses = useLiveBuses();
   const liveByNumber = new Map(liveBuses.map((b) => [b.busId, b]));
+  // Marked inoperable by a conductor or an operator (RTDB inoperableBuses) —
+  // shown instead of Active / Inactive.
+  const inoperableBuses = useInoperableBuses(busLine);
+  const inoperableByNumber = new Map(inoperableBuses.map((b) => [b.busId, b]));
 
   // null | { mode: 'add' } | { mode: 'edit' | 'delete', busId }
+  //      | { mode: 'status', busId, to: 'inoperable' | 'operable' } (confirm, opened from the edit pop-up)
   const [modal, setModal] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState(null);
+  const [statusSaving, setStatusSaving] = useState(false);
+  const [statusError, setStatusError] = useState(null);
 
   // Look the bus up on every render so the pop-ups see live changes.
   const modalBus = modal?.busId ? buses.find((b) => b.id === modal.busId) ?? null : null;
   const modalBusLive = modalBus ? liveByNumber.get(modalBus.busNumber) : null;
+  const modalBusInoperable = modalBus ? inoperableByNumber.get(modalBus.busNumber) ?? null : null;
 
   const closeModal = () => {
     setModal(null);
     setDeleteError(null);
+    setStatusError(null);
+  };
+
+  const backToEdit = () => {
+    setStatusError(null);
+    setModal({ mode: 'edit', busId: modalBus.id });
   };
 
   const handleSave = async (data) => {
@@ -64,6 +94,21 @@ export default function ManageBus() {
       setDeleteError(err.message);
     } finally {
       setDeleting(false);
+    }
+  };
+
+  // Back to the edit pop-up afterwards — the live listener updates its status.
+  const handleStatusChange = async () => {
+    setStatusSaving(true);
+    setStatusError(null);
+    try {
+      if (modal.to === 'inoperable') await markBusInoperable(modalBus.busNumber);
+      else await clearInoperableBus(modalBus.busNumber);
+      backToEdit();
+    } catch (err) {
+      setStatusError(err.message);
+    } finally {
+      setStatusSaving(false);
     }
   };
 
@@ -99,7 +144,10 @@ export default function ManageBus() {
                   <td className="px-5 py-4 text-sm text-slate-700">{bus.plateNumber}</td>
                   <td className="px-5 py-4 text-sm text-slate-700">{bus.model}</td>
                   <td className="px-5 py-4">
-                    <StatusBadge live={liveByNumber.get(bus.busNumber)} />
+                    <StatusBadge
+                      live={liveByNumber.get(bus.busNumber)}
+                      inoperable={inoperableByNumber.get(bus.busNumber)}
+                    />
                   </td>
                   <td className="px-5 py-4 text-right">
                     <button
@@ -149,9 +197,11 @@ export default function ManageBus() {
           mode={modal.mode}
           bus={modalBus}
           isActive={Boolean(modalBusLive)}
+          inoperable={modalBusInoperable}
           line={busLine}
           onSave={handleSave}
           onDelete={() => setModal({ mode: 'delete', busId: modalBus.id })}
+          onChangeStatus={(to) => setModal({ mode: 'status', busId: modalBus.id, to })}
           onClose={closeModal}
         />
       )}
@@ -188,6 +238,27 @@ export default function ManageBus() {
           confirmLabel={deleting ? 'Deleting…' : 'Delete Bus'}
           onConfirm={deleting ? () => {} : handleDelete}
           onCancel={deleting ? () => {} : () => setModal({ mode: 'edit', busId: modalBus.id })}
+        />
+      )}
+
+      {modal?.mode === 'status' && modalBus && (
+        <ConfirmDialog
+          title={
+            modal.to === 'inoperable'
+              ? `Mark ${modalBus.busNumber} as inoperable?`
+              : `Mark ${modalBus.busNumber} as operable?`
+          }
+          message={
+            statusError ??
+            (modal.to === 'inoperable'
+              ? 'The bus is taken out of service: conductors can’t start trips on it until you mark it operable again.'
+              : 'The bus returns to service and conductors can start trips on it again.')
+          }
+          confirmLabel={
+            statusSaving ? 'Saving…' : modal.to === 'inoperable' ? 'Mark as Inoperable' : 'Mark as Operable'
+          }
+          onConfirm={statusSaving ? () => {} : handleStatusChange}
+          onCancel={statusSaving ? () => {} : backToEdit}
         />
       )}
     </MainLayout>
