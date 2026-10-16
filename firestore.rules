@@ -259,6 +259,29 @@ service cloud.firestore {
       allow delete: if signedIn() && request.auth.uid == userId;
     }
 
+    // Notify on Arrival watches (functions/arrivalWatches.js), id {uid}_{busId}:
+    // a commuter's boarding point for one bus, kept only while the watch is
+    // active. Created, notified and ended only by Cloud Functions (which
+    // enforce the limits and measure the boarding point along the route). The
+    // owner can read theirs and turn one off — status active → cancelled,
+    // removing the boarding point; operators of the route's line can read
+    // them for support.
+    match /arrivalWatches/{watchId} {
+      allow read: if signedIn()
+        && (resource.data.userId == request.auth.uid
+            || operatorOnLine(resource.data.line));
+      allow create, delete: if false;
+      allow update: if signedIn()
+        && resource.data.userId == request.auth.uid
+        && resource.data.status == 'active'
+        && request.resource.data.status == 'cancelled'
+        && request.resource.data.endReason == 'user'
+        && request.resource.data.endedAt == request.time
+        && !('boardingPoint' in request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'endReason', 'endedAt', 'boardingPoint']);
+    }
+
     // No catch-all: any collection not matched above is denied by default.
   }
 }

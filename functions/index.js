@@ -31,6 +31,9 @@ export {
   expireInoperableBuses,
 } from "./inoperableBuses.js";
 
+// Notify on Arrival: commuters' arrival watches (see arrivalWatches.js).
+export { createArrivalWatch } from "./arrivalWatches.js";
+
 const db = getFirestore();
 const auth = getAuth();
 
