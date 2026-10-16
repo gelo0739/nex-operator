@@ -32,7 +32,11 @@ export {
 } from "./inoperableBuses.js";
 
 // Notify on Arrival: commuters' arrival watches (see arrivalWatches.js).
-export { createArrivalWatch, onBusLocationWritten } from "./arrivalWatches.js";
+export {
+  createArrivalWatch,
+  onBusLocationWritten,
+  cleanupArrivalWatches,
+} from "./arrivalWatches.js";
 
 const db = getFirestore();
 const auth = getAuth();

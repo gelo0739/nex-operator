@@ -102,10 +102,12 @@ export const deleteMyAccount = onCall({ region: REGION, timeoutSeconds: 120 }, a
 
   try {
     const bucket = getStorage().bucket();
-    const [feedback, lostItems, rateLimits] = await Promise.all([
+    const [feedback, lostItems, rateLimits, arrivalWatches] = await Promise.all([
       db.collection("service_feedbacks").where("userId", "==", uid).get(),
       db.collection("lost_item_reports").where("userId", "==", uid).get(),
       db.collection("feedback_rate_limits").where("uid", "==", uid).get(),
+      // Notify on Arrival watches (boarding points) — see arrivalWatches.js
+      db.collection("arrivalWatches").where("userId", "==", uid).get(),
     ]);
 
     // 1. photos
@@ -119,13 +121,14 @@ export const deleteMyAccount = onCall({ region: REGION, timeoutSeconds: 120 }, a
     for (const path of photoPaths) await deleteFile(bucket, path);
     for (const prefix of PHOTO_PREFIXES(uid)) await bucket.deleteFiles({ prefix });
 
-    // 2. anonymize reports, drop rate limits and push tokens
+    // 2. anonymize reports, drop rate limits, arrival watches and push tokens
     const operations = [
       ...feedback.docs.map((docSnap) => (batch) =>
         batch.update(docSnap.ref, anonymizePatch(docSnap.data(), ANONYMIZE.service_feedbacks))),
       ...lostItems.docs.map((docSnap) => (batch) =>
         batch.update(docSnap.ref, anonymizePatch(docSnap.data(), ANONYMIZE.lost_item_reports))),
       ...rateLimits.docs.map((docSnap) => (batch) => batch.delete(docSnap.ref)),
+      ...arrivalWatches.docs.map((docSnap) => (batch) => batch.delete(docSnap.ref)),
       (batch) => batch.delete(db.collection("push_tokens").doc(uid)),
     ];
     await commitInBatches(db, operations);
@@ -142,6 +145,7 @@ export const deleteMyAccount = onCall({ region: REGION, timeoutSeconds: 120 }, a
       uid,
       feedback: feedback.size,
       lostItems: lostItems.size,
+      arrivalWatches: arrivalWatches.size,
       photos: photoPaths.size,
     });
     return { ok: true };

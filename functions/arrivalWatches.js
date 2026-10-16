@@ -30,11 +30,13 @@ import { FieldValue, getFirestore, Timestamp } from "firebase-admin/firestore";
 import { logger } from "firebase-functions";
 import { onValueWritten } from "firebase-functions/v2/database";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 
 import {
   BOARDING_MAX_OFFSET_METERS,
   BUS_ALONG_MEMORY_MS,
   BUS_STALE_MS,
+  CLEANUP_GRACE_MS,
   MAX_ACTIVE_WATCHES,
   PASSED_BUFFER_METERS,
   ROUTE_CACHE_MS,
@@ -189,7 +191,10 @@ export const createArrivalWatch = onCall({ region: REGION }, async (request) => 
     const active = await tx.get(
       db.collection(WATCHES).where("userId", "==", uid).where("status", "==", "active"),
     );
-    const others = active.docs.filter((doc) => doc.id !== watchRef.id);
+    // an expired watch the cleanup hasn't swept yet doesn't count
+    const others = active.docs.filter(
+      (doc) => doc.id !== watchRef.id && (doc.get("expiresAt")?.toMillis?.() ?? 0) > now,
+    );
     if (others.length >= MAX_ACTIVE_WATCHES) {
       throw new HttpsError(
         "resource-exhausted",
@@ -414,5 +419,54 @@ export const onBusLocationWritten = onValueWritten(
     }
 
     if (items.length > 0) await applyDecisions(busId, items);
+  },
+);
+
+// ─── CLEANUP ────────────────────────────────────────────────────
+// Daily: a watch still "active" past expiresAt (its bus stopped sending, so
+// the trigger never ended it) is marked expired and loses its boarding
+// point; any watch whose expiresAt is more than CLEANUP_GRACE_MS ago is
+// deleted. expiresAt is creation + 2 h, so nothing outlives ~26 h. One
+// single-field range query — no composite index.
+const CLEANUP_BATCH_SIZE = 400;
+
+export const cleanupArrivalWatches = onSchedule(
+  { schedule: "every day 03:00", timeZone: "Asia/Manila", region: REGION },
+  async () => {
+    const db = getFirestore();
+    const now = Date.now();
+    const snapshot = await db
+      .collection(WATCHES)
+      .where("expiresAt", "<", Timestamp.fromMillis(now))
+      .get();
+
+    const operations = [];
+    let expired = 0;
+    let deleted = 0;
+    for (const doc of snapshot.docs) {
+      const expiresAt = doc.get("expiresAt")?.toMillis?.() ?? 0;
+      if (expiresAt < now - CLEANUP_GRACE_MS) {
+        operations.push((batch) => batch.delete(doc.ref));
+        deleted += 1;
+      } else if (doc.get("status") === "active") {
+        operations.push((batch) =>
+          batch.update(doc.ref, {
+            status: "expired",
+            endReason: "expired",
+            endedAt: FieldValue.serverTimestamp(),
+            boardingPoint: FieldValue.delete(),
+            boardingAlong: FieldValue.delete(),
+          }),
+        );
+        expired += 1;
+      }
+    }
+
+    for (let start = 0; start < operations.length; start += CLEANUP_BATCH_SIZE) {
+      const batch = db.batch();
+      operations.slice(start, start + CLEANUP_BATCH_SIZE).forEach((apply) => apply(batch));
+      await batch.commit();
+    }
+    logger.info("cleanupArrivalWatches", { expired, deleted });
   },
 );
