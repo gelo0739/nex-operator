@@ -13,6 +13,14 @@ service firebase.storage {
         && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'operator';
     }
 
+    // An operator of the line the report / feedback doc (`collection`/`docId`)
+    // was filed under — the same scoping the Firestore rules apply to the doc.
+    function isOperatorForDoc(collection, docId) {
+      return isOperator()
+        && firestore.get(/databases/(default)/documents/$(collection)/$(docId)).data.get('line', null)
+           == firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.line;
+    }
+
     function isImageUnder5MB() {
       return request.resource.size < 5 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
@@ -20,18 +28,21 @@ service firebase.storage {
 
     // Feedback ticket photos: feedback/{uid}/{feedbackId}.jpg
     // Private — only the commuter who uploaded it and operators can view it.
+    // The file is named after its feedback doc: {feedbackId}.jpg.
     match /feedback/{uid}/{fileName} {
       allow create: if signedIn() && request.auth.uid == uid && isImageUnder5MB();
-      allow read: if (signedIn() && request.auth.uid == uid) || isOperator();
-      allow delete: if isOperator();
+      allow read: if (signedIn() && request.auth.uid == uid)
+        || isOperatorForDoc('service_feedbacks', fileName.split('[.]')[0]);
+      allow delete: if isOperatorForDoc('service_feedbacks', fileName.split('[.]')[0]);
     }
 
     // Lost-item photos: lost_items/{uid}/{reportId}/item.jpg | ticket.jpg
     // Private — only the reporter and operators can view them.
     match /lost_items/{uid}/{reportId}/{fileName} {
       allow create: if signedIn() && request.auth.uid == uid && isImageUnder5MB();
-      allow read: if (signedIn() && request.auth.uid == uid) || isOperator();
-      allow delete: if isOperator();
+      allow read: if (signedIn() && request.auth.uid == uid)
+        || isOperatorForDoc('lost_item_reports', reportId);
+      allow delete: if isOperatorForDoc('lost_item_reports', reportId);
     }
 
     // Legacy flat folders from before private paths. No new uploads; old docs

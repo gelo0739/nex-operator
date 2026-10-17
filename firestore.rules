@@ -74,11 +74,14 @@ service cloud.firestore {
         && (request.auth.uid == userId
             || (isOperator()
                 && (resource.data.role == 'commuter' || resource.data.line == callerProfile().line)));
+      // Only the sign-up's own fields: nothing server-only (line, name,
+      // mustChangePassword, createdBy…) can be planted at creation.
       allow create: if signedIn()
         && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['email', 'role', 'createdAt', 'legalAcceptance'])
         && request.resource.data.role == 'commuter'
-        && !('line' in request.resource.data)
-        && !('mustChangePassword' in request.resource.data)
+        && request.resource.data.email is string
+        && request.resource.data.createdAt == request.time
         && legalAcceptanceOk(request.resource.data, {});
       allow update: if
         // An operator may rename a conductor on their own line — nothing else.
@@ -102,12 +105,37 @@ service cloud.firestore {
       return /databases/$(database)/documents/feedback_rate_limits/$(request.auth.uid + '_' + routeId);
     }
 
+    // The bus line of route `routeId` — a report or feedback is filed under the
+    // line of the route it's about, so it shows on that operator's dashboard
+    // (and nobody else's). A route that doesn't exist fails the get.
+    function routeLine(routeId) {
+      return get(/databases/$(database)/documents/routes/$(routeId)).data.get('line', null);
+    }
+
     // Passenger feedback: commuters submit their own (validated, rate-limited);
     // only the author and operators can read it; operators review it.
     match /service_feedbacks/{feedbackId} {
+      // Exactly the fields the NEX app writes — the review fields (operatorNote,
+      // statusUpdated*) are operators' only.
       allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+             'status', 'categories', 'category', 'comment', 'createdAt', 'rating', 'userId',
+             'routeId', 'routeName', 'line', 'ticketPhotoPath', 'hasPhotos'])
         && request.resource.data.userId == request.auth.uid
         && request.resource.data.status == 'new'
+        && request.resource.data.line == routeLine(request.resource.data.routeId)
+        && (!('routeName' in request.resource.data)
+            || (request.resource.data.routeName is string
+                && request.resource.data.routeName.size() <= 200))
+        && (!('category' in request.resource.data)
+            || (request.resource.data.category is string
+                && request.resource.data.category.size() <= 1000))
+        // the photo, if any, is this commuter's upload for this feedback
+        && (!('ticketPhotoPath' in request.resource.data)
+            || request.resource.data.ticketPhotoPath == null
+            || request.resource.data.ticketPhotoPath
+                 == 'feedback/' + request.auth.uid + '/' + feedbackId + '.jpg')
+        && (!('hasPhotos' in request.resource.data) || request.resource.data.hasPhotos is bool)
         && request.resource.data.rating is int
         && request.resource.data.rating >= 1
         && request.resource.data.rating <= 5
@@ -152,10 +180,37 @@ service cloud.firestore {
     // Lost-item reports hold the reporter's name and phone: only the reporter
     // and operators can read them; only operators can update or delete them.
     match /lost_item_reports/{reportId} {
+      // Exactly the fields the NEX app writes — the resolution fields
+      // (operatorNote, resolvedAt, statusUpdated*) are operators' only.
       allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+             'userId', 'line', 'category', 'routeId', 'routeName', 'seatLocation', 'description',
+             'contactName', 'contactPhone', 'photoPath', 'ticketPhotoPath', 'hasPhotos',
+             'status', 'createdAt'])
         && request.resource.data.userId == request.auth.uid
         && request.resource.data.status == 'PENDING'
         && request.resource.data.createdAt == request.time
+        && request.resource.data.routeId is string
+        && request.resource.data.line == routeLine(request.resource.data.routeId)
+        && (!('routeName' in request.resource.data)
+            || (request.resource.data.routeName is string
+                && request.resource.data.routeName.size() <= 200))
+        && (!('category' in request.resource.data)
+            || (request.resource.data.category is string
+                && request.resource.data.category.size() <= 50))
+        && (!('seatLocation' in request.resource.data)
+            || (request.resource.data.seatLocation is string
+                && request.resource.data.seatLocation.size() <= 100))
+        // photos, if any, are this commuter's uploads for this report
+        && (!('photoPath' in request.resource.data)
+            || request.resource.data.photoPath == null
+            || request.resource.data.photoPath
+                 == 'lost_items/' + request.auth.uid + '/' + reportId + '/item.jpg')
+        && (!('ticketPhotoPath' in request.resource.data)
+            || request.resource.data.ticketPhotoPath == null
+            || request.resource.data.ticketPhotoPath
+                 == 'lost_items/' + request.auth.uid + '/' + reportId + '/ticket.jpg')
+        && (!('hasPhotos' in request.resource.data) || request.resource.data.hasPhotos is bool)
         && request.resource.data.description is string
         && request.resource.data.description.size() > 0
         && request.resource.data.description.size() <= 2000

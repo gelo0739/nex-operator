@@ -17,6 +17,12 @@ dist-ssr
 .env.*
 !.env.example
 
+# Firebase Admin SDK service-account keys (scripts/ use them locally)
+*-firebase-adminsdk-*.json
+service-account*.json
+functions/.runtimeconfig.json
+.firebase/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
