@@ -28,13 +28,17 @@ export default function OperatorLogin() {
       await signIn(email.trim(), password, rememberMe);
       navigate(redirectTo, { replace: true });
     } catch (err) {
-      // Don't disclose whether the email exists.
+      // Don't disclose whether the email exists — but a connection problem
+      // isn't a wrong password, so say which one it is.
       const code = err?.code || '';
-      setError(
-        code === 'auth/too-many-requests'
-          ? 'Too many attempts. Please wait a moment and try again.'
-          : 'Invalid credentials. Check your email and password.',
-      );
+      const messages = {
+        'auth/too-many-requests': 'Too many attempts. Please wait a moment and try again.',
+        'auth/network-request-failed':
+          "Can't reach the server. Check your internet connection and try again.",
+        'auth/profile-unavailable':
+          "Couldn't load your operator profile. Check your internet connection and try again.",
+      };
+      setError(messages[code] ?? 'Invalid credentials. Check your email and password.');
     } finally {
       setSubmitting(false);
     }
