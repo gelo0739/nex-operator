@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useRef } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Bus,
@@ -11,9 +11,12 @@ import {
   Map,
   LogOut,
   Loader2,
+  Menu,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import NotificationBell from './NotificationBell';
+import nexLogo from '../../assets/nex-logo-blue.png';
 
 const navItems = [
   { id: 'dashboard', label: 'Fleet Overview', icon: Map, path: '/dashboard' },
@@ -40,14 +43,16 @@ const navLinkClass = ({ isActive }) => `
  * <Outlet/> changes. Pages render their title + body through <MainLayout>.
  */
 export default function AppShell() {
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const mainRef = useRef(null);
 
-  // The canvas is shared between pages: start each page at the top.
+  // Start each page at the top & close mobile drawer on route change.
   useEffect(() => {
     mainRef.current?.scrollTo({ top: 0 });
+    setIsSidebarOpen(false);
   }, [pathname]);
 
   const handleSignOut = async () => {
@@ -63,18 +68,46 @@ export default function AppShell() {
   return (
     <div className="flex h-screen bg-[#f4f6fa] text-slate-800 font-sans overflow-hidden">
 
+      {/* MOBILE BACKDROP OVERLAY */}
+      {isSidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-sm md:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
       {/* SIDEBAR NAVIGATION */}
-      <aside className="w-64 bg-[#edf1f7] border-r border-slate-200/70 p-5 flex flex-col justify-between select-none">
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 w-64 bg-[#edf1f7] border-r border-slate-200/70 p-5 flex flex-col justify-between select-none transition-transform duration-300 ease-in-out md:static md:translate-x-0 ${
+          isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
         <div>
-          {/* Brand Logo Header */}
-          <h1 className="text-xl font-bold text-blue-900 tracking-tight px-3 py-2 mb-6">
-            NEX Dashboard
-          </h1>
+          {/* Brand Logo Header + Mobile Close Button */}
+          <div className="flex items-center justify-between px-3 py-2 mb-6">
+            <img 
+              src={nexLogo} 
+              alt="NEX Logo" 
+              className="h-10 w-auto object-contain" 
+            />
+            <button
+              onClick={() => setIsSidebarOpen(false)}
+              className="p-1 rounded-lg text-slate-500 hover:bg-slate-200/60 md:hidden"
+              aria-label="Close menu"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
 
           {/* Navigation Items */}
           <nav className="space-y-1.5">
             {navItems.map((item) => (
-              <NavLink key={item.id} to={item.path} className={navLinkClass}>
+              <NavLink
+                key={item.id}
+                to={item.path}
+                className={navLinkClass}
+                onClick={() => setIsSidebarOpen(false)}
+              >
                 {({ isActive }) => (
                   <>
                     <item.icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-500'}`} />
@@ -88,7 +121,11 @@ export default function AppShell() {
 
         {/* Footer Links */}
         <div className="space-y-1.5">
-          <NavLink to="/settings" className={navLinkClass}>
+          <NavLink
+            to="/settings"
+            className={navLinkClass}
+            onClick={() => setIsSidebarOpen(false)}
+          >
             {({ isActive }) => (
               <>
                 <Settings className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-500'}`} />
@@ -110,25 +147,37 @@ export default function AppShell() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
 
         {/* TOP HEADER */}
-        <header className="h-16 px-8 flex items-center justify-end gap-5 bg-[#f4f6fa] relative z-20">
+        <header className="h-16 px-4 md:px-8 flex items-center justify-between gap-5 bg-[#f4f6fa] relative z-20 border-b border-slate-200/50 md:border-b-0">
 
-          {/* Notification Bell — live count of new passenger feedback */}
-          <NotificationBell />
+          {/* Hamburger Menu Toggle Button (Visible only on mobile) */}
+          <button
+            onClick={() => setIsSidebarOpen(true)}
+            className="p-2 rounded-xl text-slate-600 hover:bg-slate-200/60 md:hidden flex items-center justify-center"
+            aria-label="Open navigation menu"
+          >
+            <Menu className="w-6 h-6" />
+          </button>
 
-          {/* User Profile */}
-          <div className="flex items-center gap-3 pl-3 border-l border-slate-300/60">
-            <div className="text-right">
-              <p className="text-xs font-bold text-slate-900 leading-tight capitalize">{displayName}</p>
-              <p className="text-[10px] text-slate-500 font-medium">{email || 'Operations Manager'}</p>
-            </div>
-            <div className="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold border border-slate-200 shadow-sm uppercase">
-              {(displayName[0] || 'O')}
+          {/* Right Side Header Items (Notifications + Profile) */}
+          <div className="flex items-center gap-5 ml-auto">
+            {/* Notification Bell — live count of new passenger feedback */}
+            <NotificationBell />
+
+            {/* User Profile */}
+            <div className="flex items-center gap-3 pl-3 border-l border-slate-300/60">
+              <div className="text-right">
+                <p className="text-xs font-bold text-slate-900 leading-tight capitalize">{displayName}</p>
+                <p className="text-[10px] text-slate-500 font-medium">{email || 'Operations Manager'}</p>
+              </div>
+              <div className="w-9 h-9 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold border border-slate-200 shadow-sm uppercase">
+                {(displayName[0] || 'O')}
+              </div>
             </div>
           </div>
         </header>
 
         {/* PAGE CONTENT — pages are lazy-loaded, so show a spinner while one loads */}
-        <main ref={mainRef} className="flex-1 p-8 pt-6 flex flex-col gap-6 overflow-y-auto">
+        <main ref={mainRef} className="flex-1 p-4 md:p-8 pt-4 md:pt-6 flex flex-col gap-6 overflow-y-auto">
           <Suspense
             fallback={
               <div className="flex-1 flex items-center justify-center text-slate-400">

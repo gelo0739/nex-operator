@@ -151,7 +151,7 @@ export default function OperatorLogin() {
             className="w-full mt-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3.5 px-4 rounded-xl shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2 transition-all cursor-pointer"
           >
             <span>{submitting ? 'Signing In…' : 'Sign In'}</span>
-            {!submitting && <ArrowRight className="w-4 h-4" />}
+            
           </button>
         </form>
 

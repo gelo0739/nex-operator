@@ -1,157 +1,137 @@
 import { useState } from 'react';
-import { AlertTriangle, BusFront, FilePenLine, Loader2, Lock, Radio, Trash2 } from 'lucide-react';
-import Modal from './Modal';
+import { Bus, Lock, Trash2, X } from 'lucide-react';
 
-// Must match the `buses` rules in firestore.rules.
-const BUS_NUMBER_PATTERN = /^[A-Z0-9][A-Z0-9-]{1,19}$/;
-const MAX_PLATE = 20;
-const MAX_MODEL = 60;
-
-const inputClass =
-  'w-full rounded-xl border bg-slate-50 px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition-colors focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500';
-const readOnlyClass = 'cursor-not-allowed text-slate-500 focus:ring-0 focus:border-slate-200 focus:bg-slate-50';
-
-function Field({ label, error, hint, children }) {
-  return (
-    <label className="flex flex-col gap-1.5">
-      <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{label}</span>
-      {children}
-      {error ? <span className="text-xs text-red-600">{error}</span> : hint && <span className="text-[11px] text-slate-400">{hint}</span>}
-    </label>
-  );
-}
-
-/**
- * Add / edit form for a Firestore `buses` doc. `mode` is "add" or "edit".
- * In edit mode the bus number is read-only — trips and live tracking
- * (RTDB activeBuses/{busNumber}) are keyed on it. The bus line is always the
- * operator's line. `onSave(data)` is async; an Error with `field` set is shown
- * next to that field, any other error above the buttons.
- */
-export default function BusFormModal({ mode, bus, isActive, line, onSave, onDelete, onClose }) {
-  const isEdit = mode === 'edit';
-  const [form, setForm] = useState({
-    busNumber: bus?.busNumber ?? '',
-    plateNumber: bus?.plateNumber ?? '',
-    model: bus?.model ?? '',
-  });
-  const [errors, setErrors] = useState({});
+export default function BusFormModal({
+  mode,
+  bus,
+  isActive,
+  line,
+  onSave,
+  onDelete,
+  onClose,
+}) {
+  const [busNumber, setBusNumber] = useState(bus?.busNumber || '');
+  const [plateNumber, setPlateNumber] = useState(bus?.plateNumber || '');
+  const [model, setModel] = useState(bus?.model || '');
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState(null);
+  const [error, setError] = useState(null);
 
-  const updateField = (field) => (event) => {
-    setForm((prev) => ({ ...prev, [field]: event.target.value }));
-    setErrors((prev) => ({ ...prev, [field]: undefined }));
-    setSaveError(null);
-  };
-
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-    if (saving) return;
-
-    const cleaned = {
-      busNumber: form.busNumber.trim().toUpperCase().replace(/\s+/g, '-'),
-      plateNumber: form.plateNumber.trim().toUpperCase(),
-      model: form.model.trim(),
-    };
-
-    const nextErrors = {};
-    if (!isEdit) {
-      if (!cleaned.busNumber) nextErrors.busNumber = 'Bus ID is required.';
-      else if (!BUS_NUMBER_PATTERN.test(cleaned.busNumber)) {
-        nextErrors.busNumber = '2–20 characters: letters, numbers and dashes (e.g. BUS-004).';
-      }
-    }
-    if (!cleaned.plateNumber) nextErrors.plateNumber = 'Plate number is required.';
-    else if (cleaned.plateNumber.length > MAX_PLATE) nextErrors.plateNumber = `At most ${MAX_PLATE} characters.`;
-    if (!cleaned.model) nextErrors.model = 'Model is required.';
-    else if (cleaned.model.length > MAX_MODEL) nextErrors.model = `At most ${MAX_MODEL} characters.`;
-
-    if (Object.keys(nextErrors).length > 0) {
-      setErrors(nextErrors);
-      return;
-    }
-
+  const handleSubmit = async (e) => {
+    e.preventDefault();
     setSaving(true);
-    setSaveError(null);
+    setError(null);
     try {
-      await onSave(cleaned);
-    } catch (error) {
-      if (error.field) setErrors({ [error.field]: error.message });
-      else setSaveError(error.message);
+      await onSave({ busNumber, plateNumber, model });
+    } catch (err) {
+      setError(err.message || 'Failed to save bus details');
       setSaving(false);
     }
   };
 
-  const borderFor = (field) => (errors[field] ? 'border-red-300' : 'border-slate-200');
-
   return (
-    <Modal
-      icon={isEdit ? FilePenLine : BusFront}
-      title={isEdit ? `Edit ${bus.busNumber}` : 'Add New Bus'}
-      subtitle={isEdit ? 'Update this vehicle’s details.' : 'Register a new vehicle to your fleet.'}
-      onClose={saving ? () => {} : onClose}
-    >
-      <form onSubmit={handleSubmit} noValidate>
-        <div className="flex flex-col gap-4 p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm overflow-y-auto">
+      {/* Modal Container: Height capped at 90vh */}
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden border border-slate-100">
+        
+        {/* Fixed Header */}
+        <div className="p-6 pb-4 flex items-start justify-between border-b border-slate-100 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
+              <Bus className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">
+                {mode === 'add' ? 'Add New Bus' : `Edit ${bus?.busNumber}`}
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {mode === 'add' ? 'Register a vehicle to your fleet.' : 'Update this vehicle’s details.'}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            type="button"
+            className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Scrollable Form Body */}
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-4">
+          {error && (
+            <div className="p-3 text-xs font-semibold bg-rose-50 text-rose-600 rounded-xl">
+              {error}
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Field
-              label="Bus ID"
-              error={errors.busNumber}
-              hint={isEdit ? 'Can’t be changed — trips and live tracking use it.' : 'Must be unique across the fleet.'}
-            >
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                Bus ID / Number
+              </label>
               <input
                 type="text"
-                value={form.busNumber}
-                onChange={updateField('busNumber')}
-                readOnly={isEdit}
-                disabled={saving}
-                placeholder="e.g. BUS-004"
-                maxLength={20}
-                autoFocus={!isEdit}
-                className={`${inputClass} ${borderFor('busNumber')} ${isEdit ? readOnlyClass : ''}`}
+                required
+                disabled={mode === 'edit'}
+                value={busNumber}
+                onChange={(e) => setBusNumber(e.target.value)}
+                placeholder="e.g. BUS-001"
+                className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600 disabled:opacity-60 disabled:bg-slate-100"
               />
-            </Field>
-            <Field label="Plate Number" error={errors.plateNumber}>
+              {mode === 'edit' && (
+                <p className="text-[10px] text-slate-400 mt-1">Can't be changed — trips and live tracking use it.</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                Plate Number
+              </label>
               <input
                 type="text"
-                value={form.plateNumber}
-                onChange={updateField('plateNumber')}
-                disabled={saving}
-                placeholder="e.g. NX-1234"
-                maxLength={MAX_PLATE}
-                autoFocus={isEdit}
-                className={`${inputClass} ${borderFor('plateNumber')}`}
+                required
+                value={plateNumber}
+                onChange={(e) => setPlateNumber(e.target.value)}
+                placeholder="e.g. ABC 1234"
+                className="w-full px-3.5 py-2.5 text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600"
               />
-            </Field>
+            </div>
           </div>
 
-          <Field label="Model" error={errors.model}>
+          <div>
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+              Model
+            </label>
             <input
               type="text"
-              value={form.model}
-              onChange={updateField('model')}
-              disabled={saving}
-              placeholder="e.g. Volta EV-X1"
-              maxLength={MAX_MODEL}
-              className={`${inputClass} ${borderFor('model')}`}
+              required
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder="e.g. Hino / Yutong"
+              className="w-full px-3.5 py-2.5 text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600"
             />
-          </Field>
+          </div>
 
-          <Field label="Bus Line" hint="Buses are added to your account’s bus line.">
-            <div className={`${inputClass} border-slate-200 ${readOnlyClass} flex items-center gap-2`}>
-              <Lock className="w-3.5 h-3.5 text-slate-400" />
-              {line || '—'}
+          <div>
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+              Bus Line
+            </label>
+            <div className="flex items-center gap-2 px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl text-slate-600">
+              <Lock className="w-4 h-4 text-slate-400 shrink-0" />
+              <span className="font-semibold">{line || 'Default Line'}</span>
             </div>
-          </Field>
+            <p className="text-[10px] text-slate-400 mt-1">Buses are added to your account's bus line.</p>
+          </div>
 
-          {isEdit && (
-            <div className="flex items-center gap-3 rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
-              <Radio className="w-4 h-4 text-slate-400 shrink-0" />
-              <p className="flex-1 text-xs text-slate-500">Status is set automatically from live tracking.</p>
+          {mode === 'edit' && (
+            <div className="flex items-center justify-between p-3.5 bg-slate-50 rounded-2xl border border-slate-200/60 mt-2">
+              <span className="text-xs text-slate-500">
+                Status is set automatically from live tracking.
+              </span>
               <span
-                className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${
-                  isActive ? 'bg-emerald-50 text-emerald-700' : 'bg-orange-50 text-orange-600'
+                className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                  isActive ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'
                 }`}
               >
                 {isActive ? 'Active' : 'Inactive'}
@@ -159,47 +139,40 @@ export default function BusFormModal({ mode, bus, isActive, line, onSave, onDele
             </div>
           )}
 
-          {saveError && (
-            <div className="flex items-start gap-2 rounded-xl bg-red-50 border border-red-100 px-3 py-2.5 text-xs font-medium text-red-700">
-              <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
-              {saveError}
-            </div>
-          )}
-        </div>
+          {/* Sticky Actions Footer */}
+          <div className="flex items-center justify-between pt-4 border-t border-slate-100 mt-6 shrink-0">
+            {mode === 'edit' ? (
+              <button
+                type="button"
+                onClick={onDelete}
+                className="flex items-center gap-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-3 py-2 rounded-xl transition-colors cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete Bus
+              </button>
+            ) : (
+              <div />
+            )}
 
-        {/* Footer */}
-        <div className="flex items-center gap-3 px-6 py-4 border-t border-slate-100">
-          {isEdit && (
-            <button
-              type="button"
-              onClick={onDelete}
-              disabled={saving}
-              className="flex items-center gap-2 text-xs font-semibold text-red-600 px-4 py-2.5 hover:bg-red-50 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
-            >
-              <Trash2 className="w-4 h-4" />
-              Delete Bus
-            </button>
-          )}
-          <div className="flex gap-3 ml-auto">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={saving}
-              className="text-xs font-semibold text-slate-700 px-5 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl border border-slate-200 transition-colors cursor-pointer disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="flex items-center gap-2 text-xs font-semibold text-white px-5 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-xl shadow-lg shadow-blue-600/30 transition-colors cursor-pointer disabled:opacity-60"
-            >
-              {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-              {isEdit ? 'Save Changes' : 'Add Bus'}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="text-xs font-semibold text-slate-600 hover:bg-slate-100 px-4 py-2.5 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 px-5 py-2.5 rounded-xl shadow-md shadow-blue-600/30 transition-all cursor-pointer disabled:opacity-60"
+              >
+                {saving ? 'Saving…' : mode === 'add' ? 'Add Bus' : 'Save Changes'}
+              </button>
+            </div>
           </div>
-        </div>
-      </form>
-    </Modal>
+        </form>
+      </div>
+    </div>
   );
 }
