@@ -114,7 +114,7 @@ export default function ManageBus() {
 
   return (
     <MainLayout pageTitle="Manage Bus" pageSubtitle="View and manage your fleet inventory.">
-      <div>
+      <div className="flex justify-between items-center mb-4">
         <button
           onClick={() => setModal({ mode: 'add' })}
           disabled={!busLine}
@@ -125,16 +125,17 @@ export default function ManageBus() {
         </button>
       </div>
 
+      {/* TABLE CONTAINER WITH DYNAMIC SCREEN HEIGHT & STICKY HEADER */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[calc(100vh-280px)] overflow-y-auto">
           <table className="w-full text-left table-auto">
-            <thead className="bg-slate-50 border-b border-slate-200/60">
+            <thead className="bg-slate-50 border-b border-slate-200/60 sticky top-0 z-10">
               <tr className="text-[11px] text-slate-500 uppercase font-semibold tracking-wider">
-                <th className="px-5 py-3.5">Bus ID</th>
-                <th className="px-5 py-3.5">Plate Number</th>
-                <th className="px-5 py-3.5">Model</th>
-                <th className="px-5 py-3.5">Status</th>
-                <th className="px-5 py-3.5 text-right">Actions</th>
+                <th className="px-5 py-3.5 bg-slate-50">Bus ID</th>
+                <th className="px-5 py-3.5 bg-slate-50">Plate Number</th>
+                <th className="px-5 py-3.5 bg-slate-50">Model</th>
+                <th className="px-5 py-3.5 bg-slate-50">Status</th>
+                <th className="px-5 py-3.5 text-right bg-slate-50">Actions</th>
               </tr>
             </thead>
             <tbody>
