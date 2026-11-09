@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Bus, Mail, Lock, Eye, EyeOff, ArrowRight, AlertCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import nexLogo from '../../assets/nex-logo-blue.png';
 
 export default function OperatorLogin() {
   const { user, isOperator, loading, signIn } = useAuth();
@@ -54,16 +55,23 @@ export default function OperatorLogin() {
       {/* Top Left NEX Logo Header */}
       <div className="absolute top-8 left-8 z-10 flex items-center gap-2">
         <div className="flex items-center gap-1.5">
-          <Bus className="w-8 h-8 text-blue-700 -rotate-6" />
-          <span className="text-3xl font-black text-blue-900 tracking-tighter italic">NEX</span>
+          <img 
+            src={nexLogo} 
+            alt="NEX Logo" 
+            className="h-10 w-auto object-contain" 
+          />
         </div>
       </div>
 
       {/* Center Operator Login Card */}
       <div className="relative z-10 w-full max-w-md mx-4 bg-white rounded-3xl shadow-2xl shadow-slate-400/50 border border-slate-100 p-8">
         {/* Bus Icon Badge */}
-        <div className="w-14 h-14 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-500/30">
-          <Bus className="w-7 h-7 text-white" />
+        <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-500/30">
+          <img 
+            src={nexLogo} 
+            alt="NEX Logo" 
+            className="h-10 w-auto object-contain" 
+          />
         </div>
 
         {/* Title */}
@@ -92,7 +100,7 @@ export default function OperatorLogin() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="operator@nextransit.com"
+                placeholder="operatortest@nex.com"
                 required
                 className="w-full pl-10 pr-4 py-3 bg-slate-50/80 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition-all"
               />

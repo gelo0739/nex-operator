@@ -214,7 +214,7 @@ export default function PassengerFeedback() {
       )}
 
       {/* RECENT FEEDBACK */}
-      <div className="bg-white rounded-2xl border border-slate-200/60 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-200/60 shadow-sm overflow-hidden mb-6">
         <div className="flex items-center justify-between gap-3 px-5 py-4">
           <h3 className="text-lg font-bold text-slate-950">Recent Feedback</h3>
           <div className="flex items-center gap-2">
@@ -307,7 +307,8 @@ export default function PassengerFeedback() {
           </div>
         )}
 
-        <div className="overflow-x-auto">
+        {/* DYNAMIC SCROLL CONTAINER WITH STICKY HEADER */}
+        <div className="overflow-x-auto max-h-[calc(100vh-430px)] min-h-[220px] overflow-y-auto">
           <table className="w-full text-left table-fixed min-w-[880px]">
             <colgroup>
               <col className="w-[160px]" />
@@ -317,14 +318,14 @@ export default function PassengerFeedback() {
               <col className="w-[115px]" />
               <col className="w-[110px]" />
             </colgroup>
-            <thead className="bg-[#eef1fb] border-y border-slate-200/70">
+            <thead className="bg-[#eef1fb] border-y border-slate-200/70 sticky top-0 z-10">
               <tr className="text-[11px] text-slate-500 uppercase font-semibold tracking-wider">
-                <th className="px-5 py-3 text-center">Date</th>
-                <th className="px-5 py-3">Rating</th>
-                <th className="px-5 py-3">Category</th>
-                <th className="px-5 py-3">Comment</th>
-                <th className="px-5 py-3">Status</th>
-                <th className="px-5 py-3 text-center">Actions</th>
+                <th className="px-5 py-3 text-center bg-[#eef1fb]">Date</th>
+                <th className="px-5 py-3 bg-[#eef1fb]">Rating</th>
+                <th className="px-5 py-3 bg-[#eef1fb]">Category</th>
+                <th className="px-5 py-3 bg-[#eef1fb]">Comment</th>
+                <th className="px-5 py-3 bg-[#eef1fb]">Status</th>
+                <th className="px-5 py-3 text-center bg-[#eef1fb]">Actions</th>
               </tr>
             </thead>
             <tbody>
