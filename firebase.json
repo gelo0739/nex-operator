@@ -1,3 +1,4 @@
+
 {
   "firestore": {
     "rules": "firestore.rules",
@@ -6,12 +7,33 @@
   "functions": {
     "source": "functions",
     "runtime": "nodejs22",
-    "ignore": ["node_modules", ".git", "firebase-debug.log", "firebase-debug.*.log", "*.local", "test"]
+    "ignore": [
+      "node_modules",
+      ".git",
+      "firebase-debug.log",
+      "firebase-debug.*.log",
+      "*.local",
+      "test"
+    ]
   },
   "storage": {
     "rules": "storage.rules"
   },
   "database": {
     "rules": "database.rules.json"
+  },
+  "hosting": {
+    "public": "dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
   }
 }
