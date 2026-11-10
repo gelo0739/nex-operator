@@ -199,9 +199,9 @@ export default function EndOfTripReports() {
       </div>
       {activeFilterCount > 0 && <p className="-mt-3 text-xs text-slate-500">Totals reflect the active filters.</p>}
 
-      {/* RECENT REPORTS */}
-      <div className="bg-white rounded-3xl border border-slate-200/60 shadow-sm overflow-hidden">
-        <div className="flex items-center justify-between gap-3 px-6 py-5">
+      {/* RECENT REPORTS CARD */}
+      <div className="bg-white rounded-3xl border border-slate-200/60 shadow-sm overflow-hidden flex flex-col mb-8">
+        <div className="flex items-center justify-between gap-3 px-6 py-5 shrink-0">
           <h3 className="text-lg font-bold text-slate-950">Recent End of Trip Reports</h3>
           <div className="flex items-center gap-2">
             <button
@@ -241,7 +241,7 @@ export default function EndOfTripReports() {
         </div>
 
         {showFilters && (
-          <div className="flex flex-wrap items-end gap-3 px-6 py-3 border-t border-slate-100 bg-slate-50/60">
+          <div className="flex flex-wrap items-end gap-3 px-6 py-3 border-t border-slate-100 bg-slate-50/60 shrink-0">
             <FilterField label="Route">
               <select value={filters.routeId} onChange={(e) => updateFilter({ routeId: e.target.value })} className={`${FILTER_CONTROL_CLASS} cursor-pointer`}>
                 <option value="">All routes</option>
@@ -295,11 +295,16 @@ export default function EndOfTripReports() {
         )}
 
         {exportError && (
-          <p className="px-6 pb-3 -mt-2 text-xs font-medium text-amber-700">{exportError}</p>
+          <p className="px-6 pb-3 -mt-2 text-xs font-medium text-amber-700 shrink-0">{exportError}</p>
         )}
 
-        {/* Scrollable table: sticky header, more trips load as you scroll. */}
-        <div ref={scrollRef} className="max-h-[560px] overflow-auto overscroll-contain">
+        {/* DYNAMIC VIEWPORT SCROLL CONTAINER */}
+        <div
+          ref={scrollRef}
+          className={`overflow-x-auto overflow-y-auto min-h-[100px] ${
+            showFilters ? 'max-h-[calc(100vh-440px)]' : 'max-h-[calc(100vh-550px)]'
+          }`}
+        >
           <table className="w-full text-left table-fixed min-w-[820px]">
             <colgroup>
               <col className="w-[150px]" />
@@ -311,12 +316,12 @@ export default function EndOfTripReports() {
             </colgroup>
             <thead className="sticky top-0 z-10 bg-[#eef1fb] shadow-[0_1px_0_0_rgb(226_232_240)]">
               <tr className="text-[11px] text-slate-500 uppercase font-semibold tracking-wider">
-                <th className="px-6 py-3">Date / Time</th>
-                <th className="px-4 py-3">Trip ID</th>
-                <th className="px-4 py-3">Route</th>
-                <th className="px-4 py-3">Bus #</th>
-                <th className="px-4 py-3">Conductor</th>
-                <th className="px-4 py-3 text-center">Actions</th>
+                <th className="px-6 py-3 bg-[#eef1fb]">Date / Time</th>
+                <th className="px-4 py-3 bg-[#eef1fb]">Trip ID</th>
+                <th className="px-4 py-3 bg-[#eef1fb]">Route</th>
+                <th className="px-4 py-3 bg-[#eef1fb]">Bus #</th>
+                <th className="px-4 py-3 bg-[#eef1fb]">Conductor</th>
+                <th className="px-4 py-3 text-center bg-[#eef1fb]">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -388,9 +393,9 @@ export default function EndOfTripReports() {
           )}
         </div>
 
-        {/* LOAD MORE */}
+        {/* LOAD MORE FOOTER */}
         {items.length > 0 && (
-          <div className="flex flex-col items-center gap-1 px-6 py-4 bg-[#eef1fb]/70">
+          <div className="flex flex-col items-center gap-1 px-6 py-3 bg-[#eef1fb]/70 border-t border-slate-200/60 shrink-0">
             {canLoadMore ? (
               <button
                 onClick={loadMore}

@@ -214,7 +214,7 @@ export default function PassengerFeedback() {
       )}
 
       {/* RECENT FEEDBACK */}
-      <div className="bg-white rounded-2xl border border-slate-200/60 shadow-sm overflow-hidden mb-6">
+      <div className="bg-white rounded-2xl border border-slate-200/60 shadow-sm overflow-auto mb-6">
         <div className="flex items-center justify-between gap-3 px-5 py-4">
           <h3 className="text-lg font-bold text-slate-950">Recent Feedback</h3>
           <div className="flex items-center gap-2">

@@ -236,8 +236,8 @@ export default function LostItemReports() {
       </div>
 
       {/* TABLE */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden mb-8">
-        <div className="overflow-x-auto max-h-[calc(100vh-400px)] p-4 space-y-3">
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200/60 overflow-x-auto mb-8">
+        <div className="overflow-x-auto max-h-[calc(100vh-400px)] p-4">
           <table className="w-full text-left table-fixed min-w-[720px]">
             <colgroup>
               <col className="w-[160px]" />

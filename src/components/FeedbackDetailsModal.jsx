@@ -85,7 +85,7 @@ export default function FeedbackDetailsModal({ feedback, onClose, onReviewSaved 
       onClose={onClose}
       maxWidth="max-w-2xl"
     >
-      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] gap-6 p-6 max-h-[70vh] overflow-y-auto">
+      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_220px] gap-6 p-6 max-h-[70vh]">
         <div className="flex flex-col gap-5 min-w-0">
           <DetailSection label="Rating">
             <div className="flex items-center gap-3">
