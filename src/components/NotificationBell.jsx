@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, CheckCheck, ChevronRight, Loader2 } from 'lucide-react';
+import { Bell, Bus, CheckCheck, ChevronRight, Loader2, MapPin } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import useNewFeedback from '../hooks/useNewFeedback';
+import useUnavailableBuses from '../hooks/useUnavailableBuses';
+import { hasPosition } from '../utils/unavailableBuses';
 import StarRating from './StarRating';
 import CategoryPill from './CategoryPill';
 import { feedbackCategories } from '../utils/feedback';
@@ -12,14 +14,21 @@ import { clearNotifications } from '../utils/notificationServices';
 const PREVIEW_COUNT = 5;
 
 /**
- * Header bell: live count of "new" passenger feedback + a preview popover.
- * "Clear" dismisses the current notifications for this operator only (stored
- * as `notificationsClearedAt` on their profile); the feedback stays "New" on
- * the Passenger Feedback page until someone reviews it.
+ * Header bell: live alerts for buses on the line marked unavailable by a
+ * conductor (RTDB unavailableBuses) + "new" passenger feedback, with a preview
+ * popover. An unavailable alert opens the bus's reported location on the
+ * Fleet Overview map. "Clear" dismisses the current notifications for this
+ * operator only (stored as `notificationsClearedAt` on their profile); the
+ * feedback stays "New" and the bus stays unavailable (on the map) until
+ * someone acts on it.
  */
 export default function NotificationBell() {
   const { user, profile, busLine } = useAuth();
-  const { items, count, capped } = useNewFeedback(busLine, profile?.notificationsClearedAt ?? null);
+  const clearedAt = profile?.notificationsClearedAt ?? null;
+  const { items, count: feedbackCount, capped } = useNewFeedback(busLine, clearedAt);
+  const clearedMs = clearedAt?.toMillis?.() ?? 0;
+  const unavailable = useUnavailableBuses(busLine).filter((bus) => (bus.unavailableAt ?? 0) > clearedMs);
+  const count = feedbackCount + unavailable.length;
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -60,12 +69,13 @@ export default function NotificationBell() {
   };
 
   const countLabel = capped ? `${count}+` : String(count);
+  const feedbackCountLabel = capped ? `${feedbackCount}+` : String(feedbackCount);
 
   return (
     <div className="relative" ref={containerRef}>
       <button
         onClick={() => setOpen((v) => !v)}
-        aria-label={count ? `${countLabel} new feedback` : 'Notifications'}
+        aria-label={count ? `${countLabel} new notifications` : 'Notifications'}
         aria-expanded={open}
         className="p-2 text-slate-600 hover:bg-slate-200/60 rounded-full relative transition-colors cursor-pointer"
       >
@@ -81,14 +91,14 @@ export default function NotificationBell() {
         <div className="absolute right-0 top-full mt-2 w-[360px] bg-white rounded-2xl border border-slate-200/70 shadow-xl shadow-slate-900/10 overflow-hidden z-30">
           <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
             <div className="flex items-center gap-2">
-              <p className="text-sm font-bold text-slate-950">New feedback</p>
+              <p className="text-sm font-bold text-slate-950">Notifications</p>
               {count > 0 && <span className="text-[11px] font-semibold text-blue-700 bg-blue-50 rounded-full px-2 py-0.5">{countLabel}</span>}
             </div>
             {count > 0 && (
               <button
                 onClick={handleClear}
                 disabled={clearing}
-                title="Dismiss these notifications (feedback stays New on the Passenger Feedback page)"
+                title="Dismiss these notifications (feedback stays New and unavailable buses stay on the map)"
                 className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-blue-700 px-2 py-1 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {clearing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCheck className="w-3.5 h-3.5" />}
@@ -104,10 +114,37 @@ export default function NotificationBell() {
                 <CheckCheck className="w-5 h-5" />
               </div>
               <p className="text-sm font-semibold text-slate-900">You’re all caught up</p>
-              <p className="text-xs text-slate-500">New passenger feedback will show up here.</p>
+              <p className="text-xs text-slate-500">Unavailable buses and new passenger feedback will show up here.</p>
             </div>
           ) : (
             <ul className="max-h-[360px] overflow-y-auto divide-y divide-slate-100">
+              {unavailable.map((bus) => (
+                <li key={`unavailable-${bus.busId}`}>
+                  <button
+                    onClick={() => go(`/dashboard?unavailable=${encodeURIComponent(bus.busId)}`)}
+                    className="w-full text-left px-4 py-3 bg-red-50/40 hover:bg-red-50 transition-colors cursor-pointer flex items-start gap-3"
+                  >
+                    <div className="w-8 h-8 shrink-0 rounded-xl bg-red-100 text-red-600 flex items-center justify-center">
+                      <Bus className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-bold text-red-700">{bus.busId} marked unavailable</p>
+                        <span className="text-[11px] text-slate-400 shrink-0">{formatDateTime(bus.unavailableAt)}</span>
+                      </div>
+                      <p className="mt-0.5 text-xs text-slate-600 truncate">
+                        {bus.source === 'operator'
+                          ? 'Set unavailable by an operator'
+                          : `${bus.conductorName || 'A conductor'}${bus.routeName ? ` · ${bus.routeName}` : ''}`}
+                      </p>
+                      <p className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-blue-700">
+                        <MapPin className="w-3 h-3" />
+                        {hasPosition(bus) ? 'View location on map' : 'Location unknown · view on Fleet Overview'}
+                      </p>
+                    </div>
+                  </button>
+                </li>
+              ))}
               {items.slice(0, PREVIEW_COUNT).map((feedback) => {
                 const [firstTag] = feedbackCategories(feedback);
                 return (
@@ -134,10 +171,10 @@ export default function NotificationBell() {
           )}
 
           <button
-            onClick={() => go(count > 0 ? '/feedback?status=new' : '/feedback')}
+            onClick={() => go(feedbackCount > 0 ? '/feedback?status=new' : '/feedback')}
             className="w-full flex items-center justify-center gap-1 px-4 py-3 text-xs font-semibold text-blue-700 bg-slate-50 hover:bg-blue-50 border-t border-slate-100 cursor-pointer"
           >
-            {count > 0 ? `View all new feedback (${countLabel})` : 'Open Passenger Feedback'}
+            {feedbackCount > 0 ? `View all new feedback (${feedbackCountLabel})` : 'Open Passenger Feedback'}
             <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>

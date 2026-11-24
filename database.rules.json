@@ -3,14 +3,15 @@
     "activeBuses": {
       ".read": "auth != null",
       "$busId": {
-        ".write": "auth != null && auth.token.role === 'conductor' && ((!newData.exists() && (!data.exists() || data.child('conductorId').val() === auth.uid || data.child('lastUpdated').val() < now - 600000)) || (newData.exists() && newData.child('conductorId').val() === auth.uid && (!data.exists() || data.child('conductorId').val() === auth.uid || data.child('lastUpdated').val() < now - 600000)))",
+        ".write": "auth != null && auth.token.role === 'conductor' && ((!newData.exists() && (!data.exists() || data.child('conductorId').val() === auth.uid || data.child('lastUpdated').val() < now - 600000)) || (newData.exists() && newData.child('conductorId').val() === auth.uid && (!data.exists() || data.child('conductorId').val() === auth.uid || data.child('lastUpdated').val() < now - 600000) && (newData.child('status').val() !== 'active' || !root.child('unavailableBuses').child($busId).exists())))",
         ".validate": "newData.hasChildren(['busId', 'conductorId', 'lat', 'lng', 'status', 'lastUpdated'])",
         "busId": { ".validate": "newData.isString() && newData.val() === $busId" },
         "conductorId": { ".validate": "newData.isString()" },
         "lat": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
         "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
         "speed": { ".validate": "newData.isNumber() && newData.val() >= 0" },
-        "status": { ".validate": "newData.val() === 'active'" },
+        "status": { ".validate": "newData.val() === 'active' || newData.val() === 'unavailable'" },
+        "unavailableAt": { ".validate": "newData.isNumber() && newData.val() <= now + 60000" },
         "lastUpdated": { ".validate": "newData.isNumber() && newData.val() <= now + 60000" },
         "tripStartedAt": { ".validate": "newData.isNumber() && newData.val() <= now + 60000" },
         "routeId": { ".validate": "newData.isString()" },
@@ -18,9 +19,14 @@
         "$other": { ".validate": false }
       }
     },
+    "unavailableBuses": {
+      ".read": "auth != null",
+      ".write": false
+    },
     "tripHistory": {
       ".read": false,
       ".write": false
     }
   }
 }
+

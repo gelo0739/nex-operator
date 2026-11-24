@@ -3,8 +3,9 @@ import { db } from "../lib/firebase";
 import { USERS_COLLECTION } from "../lib/collections";
 
 // Dismisses the bell's current notifications for this operator only: the bell
-// then counts just feedback created after this moment. The feedback itself
-// keeps its "new" review status. (firestore.rules lets users update their own
+// then counts just feedback created / buses marked unavailable after this
+// moment. The feedback keeps its "new" review status and unavailable buses
+// stay on the Fleet Overview map. (firestore.rules lets users update their own
 // doc as long as `role` / `line` are untouched.)
 export const clearNotifications = async (uid) => {
   try {

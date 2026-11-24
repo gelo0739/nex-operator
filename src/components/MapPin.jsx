@@ -1,4 +1,4 @@
-import { Bus } from 'lucide-react';
+import { Bus, TriangleAlert } from 'lucide-react';
 
 /**
  * Custom map pin designs, rendered inside <AdvancedMarker>.
@@ -9,6 +9,9 @@ import { Bus } from 'lucide-react';
  *  - 'bus'      blue label pill (anchor="bottom"). `active` lifts it off the
  *               map with a spring (focused bus); `dimmed` fades it (another
  *               bus is focused).
+ *  - 'unavailable' red label pill with a warning icon (anchor="bottom") — a
+ *               bus marked unavailable, at the spot it was reported. `active`
+ *               adds a ring; `dimmed` fades it.
  */
 export default function MapPin({ variant, label, draggable = false, active = false, dimmed = false }) {
   const grab = draggable ? 'cursor-grab active:cursor-grabbing' : '';
@@ -46,6 +49,26 @@ export default function MapPin({ variant, label, draggable = false, active = fal
         />
         <circle cx="15" cy="15" r="5.5" fill="#ffffff" />
       </svg>
+    );
+  }
+
+  if (variant === 'unavailable') {
+    return (
+      <div className={`flex flex-col items-center pb-1 transition-opacity duration-300 ${dimmed ? 'opacity-55' : 'opacity-100'}`}>
+        <div
+          className={`flex items-center gap-1.5 text-white text-[11px] font-bold pl-1.5 pr-2.5 py-1 rounded-full whitespace-nowrap transition-all duration-200 ${
+            active
+              ? 'bg-red-700 ring-4 ring-red-500/30 shadow-2xl shadow-red-900/40 scale-110'
+              : 'bg-red-600 shadow-lg shadow-red-600/30 hover:bg-red-700'
+          }`}
+        >
+          <span className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center">
+            <TriangleAlert className="w-3 h-3" />
+          </span>
+          {label}
+        </div>
+        <div className={`w-2 h-2 -mt-1 rotate-45 ${active ? 'bg-red-700' : 'bg-red-600'}`} />
+      </div>
     );
   }
 

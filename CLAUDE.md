@@ -88,6 +88,7 @@ src/
     useRoutes.js               # Firestore `routes` where line == busLine
     useConductors.js           # Firestore `users` where role == "conductor" && line == busLine
     useNewFeedback.js          # live `service_feedbacks` with status "new" on the line (bell)
+    useUnavailableBuses.js     # RTDB `unavailableBuses` on the line (bell + Fleet Overview map)
     usePendingLostItemCount.js # live PENDING lost-item count on the line (Fleet Overview card)
     useLostItemChanges.js      # cheap "a report changed / arrived" signal (2 × limit-1 listeners)
     useCursorPagination.js     # numbered pages over a Firestore cursor query (feedback, lost items)
@@ -104,6 +105,7 @@ src/
     conductorServices.js       # callable wrappers (create / reset password / delete), updateConductor, generateTempPassword
     accountServices.js         # changeOwnPassword (re-authenticate + updatePassword), MIN_PASSWORD_LENGTH
     notificationServices.js    # clearNotifications (bell "Clear" → users/{uid}.notificationsClearedAt)
+    unavailableBuses.js        # subscribeToUnavailableBuses (RTDB, lazy SDK), returnBusToService (callable), hasPosition
     directions.js              # fetchDrivingRoute (DirectionsService) + reverseGeocode (Geocoder)
     geo.js                     # haversineMeters, bestInsertIndex, parseHours/formatHours
     feedback.js                # FEEDBACK_TAGS/STATUSES, feedbackCategories, fetchFeedbackPage/Stats/Trend, getFeedback, updateFeedbackReview
@@ -124,7 +126,7 @@ src/
     AppShell.jsx               # sidebar + header (NotificationBell) + <Outlet/> — the layout route
     MainLayout.jsx             # per-page title block (pageTitle / pageSubtitle / headerAction) + body
     ProtectedRoute.jsx         # auth gate — splash while loading, /login if signed out, "No operator access" if not an operator
-    NotificationBell.jsx       # header bell: live "new feedback" count + preview popover + Clear
+    NotificationBell.jsx       # header bell: unavailable buses + "new feedback" count, preview popover, Clear
     Modal.jsx                  # reusable pop-up shell (Escape / backdrop to close)
     ConfirmDialog.jsx          # reusable destructive-action confirm
     StatusPill.jsx             # pill with a dot, tones blue / amber / emerald / slate
@@ -336,6 +338,17 @@ Realtime Database:
   Written by the NEX conductor app (and bus-simulator). A bus counts as live only if
   `status == "active"` and `lastUpdated` is < 5 min old (`useLiveBuses`). There is no `line` field
   — pages scope live buses to the line by `routeId` ∈ line routes or `conductorId` ∈ line conductors.
+  On "Mark as Unavailable" the NEX app sets `status: "unavailable"` (+ `unavailableAt`), then removes it.
+- `unavailableBuses/{busNumber}` — buses taken out of service ("Mark as Unavailable" in the NEX
+  conductor app): `busId`, `conductorId`, `conductorName`, `line`, `routeId`, `routeName`, `lat`/`lng`
+  (where it was marked; null if unknown), `status: "unavailable"`, `unavailableAt` (ms), `reportId`,
+  `tripId`, `notifiedAt`, `notifiedCount`, optional `source: "operator"`. Written only by the
+  `markBusUnavailable` / `markBusUnavailableByOperator` functions; read = signed in. Removed by the
+  `clearUnavailableBus` callable ("Return to service") or after 24 h (`expireUnavailableBuses`).
+  While it exists RTDB rules refuse `status: "active"` writes for that bus. The dashboard reads it
+  via `useUnavailableBuses(busLine)` (`utils/unavailableBuses.js`, SDK loaded on demand): the bell
+  lists entries newer than `notificationsClearedAt` and links to `/dashboard?unavailable=<busId>`,
+  which focuses the red pin + pop-up (Return to service) on `FleetMap`.
 
 ## Security rules
 
@@ -400,6 +413,12 @@ Operator-only account management that needs the Admin SDK lives in `functions/in
 (Node 22, region `asia-southeast1` — must match `src/lib/functions.js` and the NEX app's
 `getFunctions(app, "asia-southeast1")`). Project is on the Blaze plan. Client wrappers:
 `src/utils/conductorServices.js`.
+
+> **Source gap:** the deployed `markBusUnavailable`, `markBusUnavailableByOperator`,
+> `clearUnavailableBus`, `expireUnavailableBuses`, `deleteMyAccount`, `createArrivalWatch`,
+> `cleanupArrivalWatches` and `onBusLocationWritten` (us-central1) are **not on `main`** (an older
+> "inoperable" draft is on `origin/finishing-pass`). `firebase deploy --only functions` from `main`
+> will offer to delete them — answer **No**, and never pass `--force`, until their source is restored.
 
 - `createConductor({ name, username, password })` → Auth user `username@nex.com` with custom claim
   `role: "conductor"` + `users/{uid}` `{ email, name, role: "conductor", line,

@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { GoogleMap, PolylineF } from '@react-google-maps/api';
-import { Bus, Clock, Gauge, Loader2, Maximize2, Route as RouteIcon, UserRound, X } from 'lucide-react';
+import { Bus, CalendarClock, Clock, Gauge, Loader2, Maximize2, Route as RouteIcon, TriangleAlert, UserRound, Wrench, X } from 'lucide-react';
 import useGoogleMaps, { MAP_ID } from '../hooks/useGoogleMaps';
 import AdvancedMarker from './AdvancedMarker';
 import MapPin from './MapPin';
 import FloatingOverlay from './FloatingOverlay';
 import LiveElapsed from './LiveElapsed';
 import { getRoute } from '../utils/routeServices';
-import { formatDuration } from '../utils/format';
+import { formatDateTime, formatDuration } from '../utils/format';
+import { hasPosition } from '../utils/unavailableBuses';
 
 const CONTAINER_STYLE = { width: '100%', height: '100%', borderRadius: '1.25rem' };
 const DEFAULT_CENTER = { lat: 14.28, lng: 120.93 }; // Cavite
@@ -32,6 +33,8 @@ const AHEAD_LINE = {
 
 // Pop-up sits this many px above the bus position (clears the lifted pin).
 const POPUP_OFFSET_Y = 58;
+
+const EMPTY_LIST = [];
 
 const formatUpdatedAgo = (seconds) => (seconds < 5 ? 'just now' : `${Math.round(seconds)}s ago`);
 
@@ -76,8 +79,20 @@ function InfoRow({ icon: Icon, label, children }) {
  * lifts, the map zooms in and follows it, its route is drawn (covered vs
  * ahead) and a pop-up shows speed, conductor and time on the trip. Unfocus
  * (same pin, ✕, empty map, or Esc) zooms back out to where you were.
+ *
+ * `unavailableBuses` (with a position) get a red pin where the conductor
+ * marked them unavailable. Which one is focused is controlled by the parent
+ * (`focusedUnavailableId` / `onFocusUnavailable`, kept in the page URL so the
+ * notification bell can link to it); its pop-up offers `onReturnToService`.
  */
-export default function FleetMap({ buses, conductorNames }) {
+export default function FleetMap({
+  buses,
+  conductorNames,
+  unavailableBuses = EMPTY_LIST,
+  focusedUnavailableId = null,
+  onFocusUnavailable,
+  onReturnToService,
+}) {
   const { isLoaded, loadError } = useGoogleMaps();
   const [map, setMap] = useState(null);
   const [focusedId, setFocusedId] = useState(null);
@@ -85,14 +100,45 @@ export default function FleetMap({ buses, conductorNames }) {
   const prevViewRef = useRef(null); // view to restore when unfocusing
   const hasFittedRef = useRef(false);
 
-  const focusedBus = focusedId ? buses.find((b) => b.busId === focusedId) ?? null : null;
+  // Focusing an unavailable bus (pin, bell link) replaces any live focus.
+  const [prevUnavailableId, setPrevUnavailableId] = useState(focusedUnavailableId);
+  if (prevUnavailableId !== focusedUnavailableId) {
+    setPrevUnavailableId(focusedUnavailableId);
+    if (focusedUnavailableId) setFocusedId(null);
+  }
 
-  // Frame all buses once, the first time any are live.
+  const mappedUnavailable = useMemo(() => unavailableBuses.filter(hasPosition), [unavailableBuses]);
+  const focusedUnavailable = focusedUnavailableId
+    ? mappedUnavailable.find((b) => b.busId === focusedUnavailableId) ?? null
+    : null;
+  const focusedBus = !focusedUnavailableId && focusedId ? buses.find((b) => b.busId === focusedId) ?? null : null;
+  const anyFocused = Boolean(focusedBus || focusedUnavailable);
+  const allPoints = useMemo(() => [...buses, ...mappedUnavailable], [buses, mappedUnavailable]);
+
+  // Frame all buses once, the first time any are on the map.
   useEffect(() => {
-    if (!map || hasFittedRef.current || buses.length === 0) return;
-    fitToBuses(map, buses);
+    if (!map || hasFittedRef.current || allPoints.length === 0) return;
+    fitToBuses(map, allPoints);
     hasFittedRef.current = true;
-  }, [map, buses]);
+  }, [map, allPoints]);
+
+  // Zoom to the focused unavailable bus (also when opened from the bell).
+  const unavailableLat = focusedUnavailable?.lat;
+  const unavailableLng = focusedUnavailable?.lng;
+  useEffect(() => {
+    if (!map || unavailableLat == null || unavailableLng == null) return;
+    if (!prevViewRef.current) {
+      prevViewRef.current = { center: map.getCenter().toJSON(), zoom: map.getZoom() };
+    }
+    hasFittedRef.current = true; // don't let the first fit-all pull the view away
+    map.panTo({ lat: unavailableLat, lng: unavailableLng });
+    map.setZoom(FOCUS_ZOOM);
+  }, [map, unavailableLat, unavailableLng]);
+
+  const unfocusAll = () => {
+    setFocusedId(null);
+    if (focusedUnavailableId) onFocusUnavailable?.(null);
+  };
 
   // Follow the focused bus as it moves.
   const focusLat = focusedBus?.lat;
@@ -101,24 +147,27 @@ export default function FleetMap({ buses, conductorNames }) {
     if (map && focusLat != null && focusLng != null) map.panTo({ lat: focusLat, lng: focusLng });
   }, [map, focusLat, focusLng]);
 
-  // Unfocused (by any means, incl. the bus going offline): zoom back out.
+  // Unfocused (by any means, incl. the bus going offline or returning to
+  // service): zoom back out.
   useEffect(() => {
-    if (focusedBus || !map || !prevViewRef.current) return;
+    if (anyFocused || !map || !prevViewRef.current) return;
     const { center, zoom } = prevViewRef.current;
     prevViewRef.current = null;
     map.panTo(center);
     map.setZoom(zoom);
-  }, [focusedBus, map]);
+  }, [anyFocused, map]);
 
   // Esc unfocuses.
   useEffect(() => {
-    if (!focusedBus) return undefined;
+    if (!anyFocused) return undefined;
     const onKeyDown = (event) => {
-      if (event.key === 'Escape') setFocusedId(null);
+      if (event.key !== 'Escape') return;
+      setFocusedId(null);
+      if (focusedUnavailableId) onFocusUnavailable?.(null);
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [focusedBus]);
+  }, [anyFocused, focusedUnavailableId, onFocusUnavailable]);
 
   // Load (once) the planned route of the focused bus.
   const focusRouteId = focusedBus?.routeId ?? null;
@@ -141,13 +190,14 @@ export default function FleetMap({ buses, conductorNames }) {
   const routePath = focusRouteId ? routeCache[focusRouteId] : null;
   const routeLoading = Boolean(focusRouteId) && !(focusRouteId in routeCache);
 
-  // Split the route where the bus is.
-  const routeSplit = useMemo(() => {
-    if (!routePath || focusLat == null || focusLng == null) return null;
+  // Split the route where the bus is. (Memoized by the React Compiler — a
+  // manual useMemo can't be kept because focus state is reset during render.)
+  let routeSplit = null;
+  if (routePath && focusLat != null && focusLng != null) {
     const here = { lat: focusLat, lng: focusLng };
     const i = nearestIndex(routePath, here);
-    return { covered: [...routePath.slice(0, i + 1), here], ahead: [here, ...routePath.slice(i + 1)] };
-  }, [routePath, focusLat, focusLng]);
+    routeSplit = { covered: [...routePath.slice(0, i + 1), here], ahead: [here, ...routePath.slice(i + 1)] };
+  }
 
   const handleBusClick = (bus) => {
     if (!map) return;
@@ -159,9 +209,23 @@ export default function FleetMap({ buses, conductorNames }) {
     if (!prevViewRef.current) {
       prevViewRef.current = { center: map.getCenter().toJSON(), zoom: map.getZoom() };
     }
+    if (focusedUnavailableId) onFocusUnavailable?.(null);
     setFocusedId(bus.busId);
     map.panTo({ lat: bus.lat, lng: bus.lng });
     map.setZoom(FOCUS_ZOOM);
+  };
+
+  // The pan / zoom happens in the effect above once the parent updates the id.
+  const handleUnavailableClick = (bus) => {
+    if (focusedUnavailableId === bus.busId) {
+      onFocusUnavailable?.(null);
+      return;
+    }
+    if (!prevViewRef.current && map) {
+      prevViewRef.current = { center: map.getCenter().toJSON(), zoom: map.getZoom() };
+    }
+    setFocusedId(null);
+    onFocusUnavailable?.(bus.busId);
   };
 
   // A click inside the pop-up also reaches the map's click handler (which
@@ -175,7 +239,7 @@ export default function FleetMap({ buses, conductorNames }) {
     const pressedInPopup = event?.domEvent && event.domEvent.timeStamp - popupPressAtRef.current < 1500;
     popupPressAtRef.current = 0;
     if (pressedInPopup) return;
-    if (focusedId) setFocusedId(null);
+    if (anyFocused) unfocusAll();
   };
 
   if (loadError) {
@@ -191,6 +255,12 @@ export default function FleetMap({ buses, conductorNames }) {
   }
 
   const conductorName = focusedBus ? conductorNames.get(focusedBus.conductorId) : null;
+  const reportedBy = focusedUnavailable
+    ? focusedUnavailable.source === 'operator'
+      ? 'Operator'
+      : focusedUnavailable.conductorName || conductorNames.get(focusedUnavailable.conductorId) || 'Unknown'
+    : null;
+  const popupTarget = focusedBus ?? focusedUnavailable;
 
   return (
     <div className="relative w-full h-full">
@@ -210,6 +280,21 @@ export default function FleetMap({ buses, conductorNames }) {
           </>
         )}
 
+        {mappedUnavailable.map((bus) => {
+          const active = bus.busId === focusedUnavailable?.busId;
+          return (
+            <AdvancedMarker
+              key={`unavailable-${bus.busId}`}
+              position={{ lat: bus.lat, lng: bus.lng }}
+              title={`${bus.busId} — marked unavailable here`}
+              zIndex={active ? 100 : 20}
+              onClick={() => handleUnavailableClick(bus)}
+            >
+              <MapPin variant="unavailable" label={bus.busId} active={active} dimmed={anyFocused && !active} />
+            </AdvancedMarker>
+          );
+        })}
+
         {buses.map((bus) => {
           const active = bus.busId === focusedBus?.busId;
           return (
@@ -220,13 +305,70 @@ export default function FleetMap({ buses, conductorNames }) {
               zIndex={active ? 100 : 10}
               onClick={() => handleBusClick(bus)}
             >
-              <MapPin variant="bus" label={bus.busId} active={active} dimmed={Boolean(focusedBus) && !active} />
+              <MapPin variant="bus" label={bus.busId} active={active} dimmed={anyFocused && !active} />
             </AdvancedMarker>
           );
         })}
 
-        {focusedBus && (
-          <FloatingOverlay position={{ lat: focusedBus.lat, lng: focusedBus.lng }} offsetY={POPUP_OFFSET_Y}>
+        {popupTarget && (
+          <FloatingOverlay position={{ lat: popupTarget.lat, lng: popupTarget.lng }} offsetY={POPUP_OFFSET_Y}>
+            {focusedUnavailable ? (
+              <div
+                onPointerDown={(event) => {
+                  popupPressAtRef.current = event.timeStamp;
+                }}
+                className="w-64 bg-white rounded-2xl shadow-xl shadow-slate-900/20 border border-slate-200/70 overflow-hidden transition duration-200 ease-out starting:opacity-0 starting:translate-y-1 motion-reduce:transition-none"
+              >
+                <div className="flex items-start gap-2.5 px-4 pt-3 pb-2.5 bg-red-50/70 border-b border-red-100">
+                  <div className="w-8 h-8 shrink-0 rounded-xl bg-red-600 text-white flex items-center justify-center">
+                    <TriangleAlert className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-slate-950">{focusedUnavailable.busId}</p>
+                    <p className="flex items-center gap-1.5 text-[11px] font-medium text-red-700">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                      Unavailable
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onFocusUnavailable?.(null)}
+                    aria-label="Close"
+                    title="Close (Esc)"
+                    className="p-1 -mr-1 text-slate-400 hover:text-slate-700 hover:bg-white rounded-lg cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="flex flex-col gap-2 px-4 py-3">
+                  <InfoRow icon={UserRound} label="Reported by">
+                    {reportedBy}
+                  </InfoRow>
+                  <InfoRow icon={RouteIcon} label="Route">
+                    <span title={focusedUnavailable.routeName ?? ''}>{focusedUnavailable.routeName || '—'}</span>
+                  </InfoRow>
+                  <InfoRow icon={CalendarClock} label="Marked">
+                    {formatDateTime(focusedUnavailable.unavailableAt)}
+                  </InfoRow>
+                  <InfoRow icon={Clock} label="Out for">
+                    <LiveElapsed since={focusedUnavailable.unavailableAt} format={formatDuration} />
+                  </InfoRow>
+                </div>
+                <p className="px-4 text-[10px] text-slate-400">Pin shows where the bus was marked unavailable.</p>
+                {onReturnToService && (
+                  <div className="px-4 pt-2.5 pb-3">
+                    <button
+                      type="button"
+                      onClick={() => onReturnToService(focusedUnavailable)}
+                      className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-slate-700 px-4 py-2 bg-white hover:bg-slate-50 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+                    >
+                      <Wrench className="w-3.5 h-3.5" />
+                      Return to service
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
             <div
               onPointerDown={(event) => {
                 popupPressAtRef.current = event.timeStamp;
@@ -272,15 +414,16 @@ export default function FleetMap({ buses, conductorNames }) {
                 Updated <LiveElapsed since={focusedBus.lastUpdated} format={formatUpdatedAgo} />
               </p>
             </div>
+            )}
           </FloatingOverlay>
         )}
       </GoogleMap>
 
       {/* Fit all */}
-      {buses.length > 0 && !focusedBus && (
+      {allPoints.length > 0 && !anyFocused && (
         <button
           type="button"
-          onClick={() => fitToBuses(map, buses)}
+          onClick={() => fitToBuses(map, allPoints)}
           title="Show all buses"
           className="absolute top-3 right-3 flex items-center gap-1.5 text-xs font-semibold text-slate-700 hover:text-blue-700 bg-white px-3 py-2 rounded-xl shadow cursor-pointer"
         >
@@ -297,7 +440,7 @@ export default function FleetMap({ buses, conductorNames }) {
           </p>
         </div>
       ) : (
-        !focusedBus && (
+        !anyFocused && (
           <div className="absolute left-3 bottom-3 pointer-events-none">
             <p className="bg-white/95 text-slate-500 text-[11px] font-medium px-3 py-1.5 rounded-full shadow">
               Click a bus to focus it
